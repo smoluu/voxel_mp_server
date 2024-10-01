@@ -2,18 +2,16 @@
 
 use serde::{Deserialize, Serialize};
 
-
-
 // Represents a single voxel in the chunk
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Voxel {
-    pub index: usize, // Single index representing the voxel's position in 3D space
-    pub id: u32,      // ID representing the type of voxel (e.g., dirt, air)
+    pub index: u32, // Single index representing the voxel's position in 3D space
+    pub id: u8,     // ID representing the type of voxel (e.g., dirt, air)
 }
 
 impl Voxel {
     // Constructor for creating a new Voxel
-    pub fn new(index: usize, id: u32) -> Self {
+    pub fn new(index: u32, id: u8) -> Self {
         Voxel { index, id }
     }
 }
@@ -28,6 +26,7 @@ pub struct Chunk {
 impl Chunk {
     // Generates a new chunk of voxels
     pub fn generate_chunk(x: i32, z: i32) -> Self {
+        let mut voxel_index: u32 = 0;
         static CHUNK_SIZE: usize = 64;
         static CHUNK_HEIGHT: usize = 256;
         let mut voxels = Vec::with_capacity(CHUNK_SIZE * CHUNK_HEIGHT * CHUNK_SIZE);
@@ -38,18 +37,40 @@ impl Chunk {
                     // Determine the voxel ID (1 for dirt, 0 for air)
                     let id = if y > 100 { 0 } else { 1 };
 
-                    // Calculate the voxel's linear index
-                    let voxel_index = (y * CHUNK_SIZE * CHUNK_SIZE) + (z * CHUNK_SIZE) + x;
-
                     // Create and store the voxel
                     voxels.push(Voxel::new(voxel_index, id));
+                    voxel_index += 1;
                 }
             }
         }
-
+        println!("Generated chunk: ({},{})", x, z);
+        println!("Voxels: ({})", voxels.len());
         Self {
             coords: (x, z), // Set the coords using the provided parameters
             voxels,
         }
+    }
+
+    
+    
+    
+    // byte[0] identifier, byte[1],[2] x,z,
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut buffer = Vec::new();
+
+        // Add identifier for chunk data
+        buffer.insert(0,1 as u8);
+
+        // Serialize coordinates (each as 4 bytes)
+        buffer.extend(&self.coords.0.to_le_bytes()); // X coordinate
+        buffer.extend(&self.coords.1.to_le_bytes()); // Z coordinate
+
+        // Serialize voxel data
+        for voxel in &self.voxels {
+            buffer.extend(&voxel.index.to_le_bytes()); // Voxel index (4 bytes)
+            buffer.push(voxel.id); // Voxel ID (1 byte)
+        }
+
+        buffer
     }
 }
