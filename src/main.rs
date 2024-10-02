@@ -1,9 +1,9 @@
 // src/main.rs
 
-mod chunk_generator; // Declare the chunk_generator module
+mod chunk; // Declare the chunk_generator module
 mod world; // Declare the world module
 
-use chunk_generator::Chunk; // Import the structs from the chunk module
+use chunk::Chunk; // Import the structs from the chunk module
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener; // Import TcpListener for handling connections
 use world::{Player, World}; // Import the World and Player structs // Import async read/write traits
@@ -21,6 +21,7 @@ async fn main() {
     let chunk = Chunk::generate_chunk(0, 0);
     world.add_chunk(0, 0, chunk.clone());
 
+    const PACKET_SIZE: usize = 1024; // Define your chunk size
     loop {
         let (mut socket, _) = listener.accept().await.unwrap();
         println!("Client connected!");
@@ -32,34 +33,50 @@ async fn main() {
         let client_id = world.client_connections.len() as u32 + 1; // Generate a client ID
         world.add_client_connection(client_id, player_id); // Link client to player
 
-        // Convert chunk to binary & add identifier to front of data
-        let data = chunk.to_bytes();
-
-        // Calculate the length of the data (including the identifier)
-        let length = data.len() as u32;
-
-        // Convert length to a 4-byte array
-        let length_bytes = length.to_le_bytes();
-
-        // Send the length first
-        if let Err(e) = socket.write_all(&length_bytes).await {
-            println!("Failed to send length: {:?}", e);
-        } else {
-            println!("Sent length data.");
-        }
-
-        // Then send the actual data
-        if let Err(e) = socket.write_all(&data).await {
-            println!("Failed to send chunk data: {:?}", e);
-        } else {
-            println!("Sent chunk data to client.");
-        }
+        let chunk = chunk.clone();
 
         // Handle communication with the client
         tokio::spawn(async move {
             let mut buf = vec![0; 1024]; // Buffer for reading data
             let n = socket.read(&mut buf).await.unwrap();
             println!("Received: {:?}", &buf[..n]);
+
+            // Convert chunk to binary & add identifier to front of data
+            let data = chunk.to_bytes();
+
+            // Calculate the length of the data (including the identifier)
+            let length = data.len() as u32;
+
+            // Convert length to a 4-byte array
+            let length_bytes = length.to_le_bytes();
+
+            // Send the length first
+            if let Err(e) = socket.write_all(&length_bytes).await {
+                println!("Failed to send length: {:?}", e);
+            } else {
+                println!("Sent length data.");
+            }
+
+            // Send the actual data in chunks
+            let data_len = data.len();
+            let mut offset = 0;
+
+            while offset < data_len {
+                // Calculate the number of bytes to send in this iteration
+                let bytes_to_send = std::cmp::min(PACKET_SIZE, data_len - offset);
+
+                // Send the current chunk
+                if let Err(e) = socket
+                    .write_all(&data[offset..offset + bytes_to_send])
+                    .await
+                {
+                    println!("Failed to send chunk data: {:?}", e);
+                    break;
+                }
+
+                println!("Sent chunk data ({} bytes) to client.", bytes_to_send);
+                offset += bytes_to_send; // Update offset
+            }
         });
     }
 }

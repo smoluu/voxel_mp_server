@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use serde::{Serialize, Deserialize};
-use crate::chunk_generator::Chunk;
+use crate::chunk::Chunk;
 
 // Represents a player in the world
 #[derive(Serialize, Deserialize, Clone)]
