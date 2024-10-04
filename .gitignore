@@ -1,1 +1,4 @@
 /target
+.megaignore
+src/voxel_mp_server.code-workspace
+voxel_mp_server.code-workspace

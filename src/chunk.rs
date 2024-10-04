@@ -36,7 +36,7 @@ impl Chunk {
             for z in 0..CHUNK_SIZE {
                 for x in 0..CHUNK_SIZE {
                     // Determine the voxel ID (1 for dirt, 0 for air)
-                    let id = if y >= 10 { 0 } else { 1 };
+                    let id = if y >= 100 { 0 } else { 1 };
 
                     if id > 0 { solid_voxel_count += 1;}
 
@@ -46,34 +46,16 @@ impl Chunk {
                 }
             }
         }
-        println!("Generated chunk: ({},{})", x, z);
+        println!("Generated chunk");
         println!("Voxels: ({}) Solid_voxel_count ({})", voxels.len(),solid_voxel_count);
-        Self {
-            coords: (x, z), // Set the coords using the provided parameters
-            voxels,
-        }
+        Chunk {
+            coords: (x,z),
+            voxels: voxels
+        } 
     }
 
     
     
     
-    // byte[0] identifier, byte[1],[2] x,z,
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut buffer = Vec::new();
 
-        // Add identifier for chunk data
-        buffer.insert(0,1 as u8);
-
-        // Serialize coordinates (each as 4 bytes)
-        buffer.extend(&self.coords.0.to_le_bytes()); // X coordinate
-        buffer.extend(&self.coords.1.to_le_bytes()); // Z coordinate
-
-        // Serialize voxel data
-        for voxel in &self.voxels {
-            buffer.extend(&voxel.index.to_le_bytes()); // Voxel index (4 bytes)
-            buffer.push(voxel.id); // Voxel ID (1 byte)
-        }
-
-        buffer
-    }
 }
