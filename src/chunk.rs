@@ -32,11 +32,11 @@ impl Chunk {
         static CHUNK_HEIGHT: usize = 256;
         let mut voxels = Vec::with_capacity(CHUNK_SIZE * CHUNK_HEIGHT * CHUNK_SIZE);
         // Loop through each voxel position in the chunk
-        for y in 0..CHUNK_HEIGHT {
-            for z in 0..CHUNK_SIZE {
-                for x in 0..CHUNK_SIZE {
+        for voxel_y in 0..CHUNK_HEIGHT {
+            for _voxel_z in 0..CHUNK_SIZE {
+                for _voxel_x in 0..CHUNK_SIZE {
                     // Determine the voxel ID (1 for dirt, 0 for air)
-                    let id = if y >= 100 { 0 } else { 1 };
+                    let id = if voxel_y >= 100 { 0 } else { 1 };
 
                     if id > 0 { solid_voxel_count += 1;}
 

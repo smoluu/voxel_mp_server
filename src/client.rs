@@ -1,4 +1,4 @@
-use crate::data::{DataIdentifier};
+use crate::data::DataIdentifier;
 use tokio::net::TcpStream; // Import TcpStream for client connections
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -10,40 +10,55 @@ pub struct Client {
     pub id: u32,                 // Unique ID for the client
     pub socket: Arc<Mutex<TcpStream>>,       // Socket connection for the client
     pub position: (f32, f32, f32), // client's position in the world
+    pub state: u32,
 }
 
 impl Client {
-    pub fn new(id: u32, socket: Arc<Mutex<TcpStream>>) -> Self {
+    pub fn new(id: u32, socket: Arc<Mutex<TcpStream>>, state: u32) -> Self {
         Client {
             id,
             socket,
             position: (0.0, 0.0, 0.0), // Default position
+            state,
+            
         }
     }
 
-    // Serialize the Client's data into a byte vector
-    pub fn initialize_client(&self) -> Vec<u8> {
-        let mut buffer = Vec::new();
 
-        // Add an identifier for client data (e.g., 1)
+    pub fn client_to_bytes(&self) -> Vec<u8> {
+
+        let mut data = Vec::new();
+        // pre allocate length header bytes
+        data.resize(4, 1);
+        // push dataIdentifier (byte index 4)
         let data_identifier = DataIdentifier::InitializeData;
-        buffer.insert(0, data_identifier as u8); // Identifier for client data
+        data.push(data_identifier as u8);
 
-        // Serialize client ID (4 bytes)
-        buffer.extend(self.id.to_le_bytes());
+        // Serialize client ID (byte index 5 to 8)
+        data.extend(self.id.to_le_bytes());
 
-        // Serialize position coordinates (each as 4 bytes)
-        buffer.extend(self.position.0.to_le_bytes()); // X coordinate
-        buffer.extend(self.position.1.to_le_bytes()); // Y coordinate
-        buffer.extend(self.position.2.to_le_bytes()); // Z coordinate
+        // Serialize position coordinates (byte index 9 to 20)
+        data.extend(self.position.0.to_le_bytes());
+        data.extend(self.position.1.to_le_bytes());
+        data.extend(self.position.2.to_le_bytes());
+        
+        // serialize client state (byte index 21)
+        data.extend(self.state.to_le_bytes());
 
-        buffer
+        // serialize length of the data & insert to bytes 0 to 3
+        let length = data.len() as u32;
+        let length_bytes = length.to_le_bytes();
+        // add length to first 4 bytes of data
+        data[..4].copy_from_slice(&length_bytes);
+
+        
+        data
     }
     
 }
 
 pub struct ClientManager {
-    pub clients: HashMap<u32, Arc<RwLock<Client>>>, // Player ID mapped to Player}
+    pub clients: HashMap<u32, Arc<RwLock<Client>>>, // Player ID mapped to Player
 }
 
 impl ClientManager {

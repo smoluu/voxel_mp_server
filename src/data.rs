@@ -5,3 +5,4 @@ pub enum DataIdentifier {
     ClientData = 1,
     ChunkData = 2,
 }
+

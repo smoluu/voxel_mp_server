@@ -1,6 +1,6 @@
 use crate::{chunk::Chunk, data::DataIdentifier};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap};
+use std::collections::HashMap;
 
 // Represents a player in the world
 #[derive(Serialize, Deserialize, Clone)]
@@ -20,7 +20,7 @@ impl Player {
 #[derive(Serialize, Deserialize)]
 pub struct World {
     pub chunks: HashMap<(i32, i32), Chunk>, // 2D map of chunks identified by their coordinates (x, z)
-    pub players: HashMap<u32, Player>,    // Map of players by their unique ID
+    pub players: HashMap<u32, Player>,      // Map of players by their unique ID
 }
 
 impl World {
@@ -53,28 +53,33 @@ impl World {
     }
 
     // byte[0] identifier, byte[1],[2] x,z,
-    pub fn chunk_to_bytes(&self, x: i32,z: i32) -> Vec<u8> {
+    pub fn chunk_to_bytes(&self, x: i32, z: i32) -> Vec<u8> {
 
-        let mut buffer = Vec::new();
+        let mut data = Vec::new();
+        // pre allocate length header bytes
+        data.resize(4, 1);
 
-
-        let chunk = self.chunks.get(&(x, z)).unwrap().clone();
-
-        // Add identifier for chunk data
+        // Add identifier for chunk data (byte index 4)
         let data_identifier = DataIdentifier::ChunkData;
-        buffer.insert(0,data_identifier as u8);
-
-        // Serialize coordinates (each as 4 bytes)
-        buffer.extend(chunk.coords.0.to_le_bytes()); // X coordinate
-        buffer.extend(chunk.coords.1.to_le_bytes()); // Z coordinate
+        data.push(data_identifier as u8);
+        
+        // Serialize coordinates (byte index 5-12)
+        let chunk = self.chunks.get(&(x, z)).unwrap().clone();
+        data.extend(chunk.coords.0.to_le_bytes()); // X coordinate
+        data.extend(chunk.coords.1.to_le_bytes()); // Z coordinate
 
         // Serialize voxel data
         for voxel in chunk.voxels {
-            buffer.extend(&voxel.index.to_le_bytes()); // Voxel index (4 bytes)
-            buffer.push(voxel.id); // Voxel ID (1 byte)
+            data.extend(&voxel.index.to_le_bytes()); // Voxel index (4 bytes)
+            data.push(voxel.id); // Voxel ID (1 byte)
         }
 
-        buffer
-    }
+        // serialize length of the data
+        let length = data.len() as u32;
+        let length_bytes = length.to_le_bytes();
+        // add length to first 4 bytes of data
+        data[..4].copy_from_slice(&length_bytes);
 
+        data
+    }
 }
