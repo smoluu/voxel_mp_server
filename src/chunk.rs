@@ -33,10 +33,10 @@ impl Chunk {
         let mut voxels = Vec::with_capacity(CHUNK_SIZE * CHUNK_HEIGHT * CHUNK_SIZE);
         // Loop through each voxel position in the chunk
         for voxel_y in 0..CHUNK_HEIGHT {
-            for _voxel_z in 0..CHUNK_SIZE {
-                for _voxel_x in 0..CHUNK_SIZE {
+            for _voxel_x in 0..CHUNK_SIZE {
+                for _voxel_z in 0..CHUNK_SIZE {
                     // Determine the voxel ID (1 for dirt, 0 for air)
-                    let id = if voxel_y >= 100 { 0 } else { 1 };
+                    let id = if voxel_y > 100 { 0 } else { 1 };
 
                     if id > 0 { solid_voxel_count += 1;}
 
@@ -46,7 +46,7 @@ impl Chunk {
                 }
             }
         }
-        println!("Generated chunk");
+        println!("Generated chunk ({},{}) ↓",x,z);
         println!("Voxels: ({}) Solid_voxel_count ({})", voxels.len(),solid_voxel_count);
         Chunk {
             coords: (x,z),

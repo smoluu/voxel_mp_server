@@ -1,23 +1,20 @@
 use crate::data::DataIdentifier;
-use tokio::net::TcpStream; // Import TcpStream for client connections
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
-use tokio::sync::Mutex;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 
-#[derive(Clone)]
+#[derive()]
 pub struct Client {
     pub id: u32,                 // Unique ID for the client
-    pub socket: Arc<Mutex<TcpStream>>,       // Socket connection for the client
     pub position: (f32, f32, f32), // client's position in the world
     pub state: u32,
 }
 
 impl Client {
-    pub fn new(id: u32, socket: Arc<Mutex<TcpStream>>, state: u32) -> Self {
+    pub fn new(id: u32, state: u32) -> Self {
         Client {
             id,
-            socket,
             position: (0.0, 0.0, 0.0), // Default position
             state,
             
@@ -67,8 +64,8 @@ impl ClientManager {
             clients: HashMap::new(),
         }
     }
-    pub fn add_client(&mut self, client: Arc<RwLock<Client>>) {
-        let client_id = client.read().unwrap().id;
+    pub async fn add_client(&mut self, client: Arc<RwLock<Client>>) {
+        let client_id = client.read().await.id;
         self.clients.insert(client_id, client);
     }
 

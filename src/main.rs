@@ -1,25 +1,17 @@
 // src/main.rs
-
-mod chunk; // declare modules
+mod chunk;
 mod client;
 mod data;
 mod world;
-use std::fmt::Debug;
-use std::sync::{Arc, RwLock};
-use data::DataIdentifier;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::Mutex;
-use tokio::time::{interval, Duration};
 
-use chunk::Chunk;
+use std::sync::Arc;
+use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf};
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::{Mutex, RwLock};
+
 use client::{Client, ClientManager};
 use world::World;
-
-pub struct Server {
-    world: Arc<RwLock<World>>,                  // The world data
-    client_manager: Arc<RwLock<ClientManager>>, // The client manager
-}
 
 #[tokio::main]
 async fn main() {
@@ -27,20 +19,19 @@ async fn main() {
     let client_manager = Arc::new(RwLock::new(ClientManager::new()));
 
     // Set up TCP listener for client connections
-    let addr = "127.0.0.1:6969"; // Set the address and port
+    let addr = "127.0.0.1:6969";
     let listener = TcpListener::bind(addr).await.unwrap();
     println!("Server running on {}", addr);
 
-    // start generating chunks
+    // Start generating chunks in a separate task
     tokio::spawn(world_generation(world.clone()));
 
-    // spawn task to accept connections
+    // Spawn task to accept connections
     tokio::spawn(accept_connections(
         listener,
         client_manager.clone(),
         world.clone(),
     ));
-    
 
     // Keep the server running indefinitely
     tokio::signal::ctrl_c().await.unwrap();
@@ -55,114 +46,97 @@ async fn accept_connections(
     loop {
         let (stream, _) = listener.accept().await.unwrap();
         println!("Client connected!");
+        
+        let (read_half, write_half) = stream.into_split();
 
-        handle_new_connection(stream, client_manager.clone(), world.clone()).await;
+        // Wrap write_half in an Arc<Mutex<>> to allow safe access from multiple tasks
+        let write_half = Arc::new(Mutex::new(write_half));
+
+        handle_new_connection(read_half, write_half.clone(), client_manager.clone(), world.clone()).await;
     }
 }
 
 async fn handle_new_connection(
-    stream: TcpStream,
+    read_half: OwnedReadHalf,
+    write_half: Arc<Mutex<OwnedWriteHalf>>,
     client_manager: Arc<RwLock<ClientManager>>,
     world: Arc<RwLock<World>>,
 ) {
-    println!("debug.");
-    // Read lock to get the client ID and release the lock immediately
+    // Assign a new client ID by locking client_manager
     let client_id = {
-        let manager = client_manager.read().unwrap();
+        let manager = client_manager.read().await;
         manager.clients.len() as u32 + 1
     };
 
-    // Create the new client with a write lock
+    // Create the new client object
     let client = Arc::new(RwLock::new(Client {
         id: client_id,
-        position: (0.0, 0.0, 2.0),            // Initial position
-        socket: Arc::new(Mutex::new(stream)), // Use Arc for the socket
+        position: (0.0, 102.0, 0.0), // Initial position
         state: 0,
     }));
-    // add client to client_manager
-    client_manager.write().unwrap().add_client(client.clone());
 
-    // Serialize the client data and send it to client
-    let client_data = client.read().unwrap().client_to_bytes();
-    send_serialized_data(client.clone(),client_data).await;
+    // Add the client to the manager
+    {
+        let mut manager = client_manager.write().await;
+        manager.add_client(client.clone()).await;
+    }
 
-    // Spawn a task to handle incoming/outgoing data for this client
-    tokio::spawn(handle_rx(client.clone()));
-    tokio::spawn(handle_tx(client.clone(), world.clone()));
-
+    // Spawn a task to handle incoming data (read_half) and outgoing data (write_half)
+    tokio::spawn(handle_rx(read_half, client.clone()));
+    tokio::spawn(handle_tx(write_half.clone(), client.clone(), world.clone()));
 }
 
-async fn handle_rx(client: Arc<RwLock<Client>>) {
-    // Get the client's socket with a lock
-    let socket = { client.read().unwrap().socket.clone() };
-    let mut buffer = [0u8; 1024]; // Buffer for reading data
+const BUFFER_SIZE: usize = 1024; // Adjust buffer size as needed
+const LENGTH_SIZE: usize = 4; // Size of the length header
+const IDENTIFIER_SIZE: usize = 1; // Size of the identifier
+
+async fn handle_rx(mut read_half: OwnedReadHalf, client: Arc<RwLock<Client>>) {
+    
+    //buffer for reading data
+    let mut buffer = vec![0u8; BUFFER_SIZE];
 
     loop {
-        // Read data into the buffer
-        match socket.lock().await.read(&mut buffer).await {
+        match read_half.read(&mut buffer).await {
             Ok(0) => {
                 println!("Client disconnected.");
                 break;
             }
             Ok(bytes_read) => {
-                println!("Received {} bytes) from client.", bytes_read);
-                // Process the received data
-                handle_incoming_client_data(&buffer[..bytes_read], client.clone()).await;
+                println!("Received {} bytes from client.", bytes_read);
+                // Process the received data here
+
             }
             Err(e) => {
                 println!("Failed to read from socket: {:?}", e);
-                break; // Handle read error and exit loop
+                break;
             }
         }
     }
 }
 
-async fn handle_incoming_client_data(bytes: &[u8], client: Arc<RwLock<Client>>) {
-    // Example of processing client bytes (e.g., updating the client's position or state)
+async fn handle_tx(write_half: Arc<Mutex<OwnedWriteHalf>>,client: Arc<RwLock<Client>>, world: Arc<RwLock<World>>) {
 
-    if bytes.len() < 12 {
-        // If the bytes length is insufficient for a position update, ignore
-        println!("Received bytes too short to process.");
-        return;
-    }
+    let world_read = world.read().await;
+    //lock write_half
 
-    // deserialize client_id
-    let client_id = u32::from_be_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]);
+    // Serialize the client data and send it to the client
+    let client_data = client.read().await.client_to_bytes();
+    send_data(write_half.clone(), client_data).await;
 
-    // Deserialize position (next 12 bytes: 4 bytes per float)
-    let pos_x = f32::from_le_bytes([bytes[5], bytes[6], bytes[7], bytes[8]]);
-    let pos_y = f32::from_le_bytes([bytes[9], bytes[10], bytes[11], bytes[12]]);
-    let pos_z = f32::from_le_bytes([bytes[13], bytes[14], bytes[15], bytes[16]]);
 
-    // deserialize client state (next 4 bytes)
-    let state = u32::from_le_bytes([bytes[17], bytes[18], bytes[19], bytes[20]]);
+    let chunk_data_1 = world_read.chunk_to_bytes(0, 0);
+    send_data(write_half.clone(), chunk_data_1).await;
 
-    {
-        // update the client's position
-        let mut client = client.write().unwrap();
-        client.position = (pos_x, pos_y, pos_z);
-    }
 
-    //println!("Updated client position to: x = {}, y = {}, z = {}",pos_x, pos_y, pos_z);
+    let chunk_data_2 = world_read.chunk_to_bytes(0, 1);
+    send_data(write_half.clone(), chunk_data_2).await;
 }
 
-async fn handle_tx(client: Arc<RwLock<Client>>, world: Arc<RwLock<World>>) {
-
-    let data = world.read().unwrap().chunk_to_bytes(0, 0);
-    send_serialized_data(client, data).await;
-
-}
-
-async fn send_serialized_data(client: Arc<RwLock<Client>>, data: Vec<u8>)
-{
-    // Lock the socket for sending data
-    let socket = client.read().unwrap().socket.clone();
-    let mut socket_lock = socket.lock().await;
-
+async fn send_data(write_half: Arc<Mutex<OwnedWriteHalf>>, data: Vec<u8>) {
+    let mut socket = write_half.lock().await; // Lock the mutex to get access to the write_half
     let buffer_size: usize = 1024;
 
     let identifier = data[4];
-
 
     // Send the data in chunks
     let data_len = data.len();
@@ -171,8 +145,7 @@ async fn send_serialized_data(client: Arc<RwLock<Client>>, data: Vec<u8>)
     while offset < data_len {
         // Calculate the number of bytes to send in this iteration
         let bytes_to_send = std::cmp::min(buffer_size, data_len - offset);
-
-        if let Err(e) = socket_lock
+        if let Err(e) = socket
             .write_all(&data[offset..offset + bytes_to_send])
             .await
         {
@@ -182,13 +155,17 @@ async fn send_serialized_data(client: Arc<RwLock<Client>>, data: Vec<u8>)
 
         offset += bytes_to_send; // Update offset
     }
+
     println!("Sent {} data ({} bytes) to client.", identifier, data_len);
     println!("Data contents: {:?}", &data[..data.len().min(16)]);
 }
 
+
+
 async fn world_generation(world: Arc<RwLock<World>>) {
-    let mut world: std::sync::RwLockWriteGuard<'_, World> = world.write().unwrap();
+    let mut world = world.write().await;
     world.insert_chunk(0, 0);
+    world.insert_chunk(0, 1);
 
     //check demand for chunks
     // generate chunks if they dont exists

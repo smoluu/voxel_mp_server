@@ -34,7 +34,7 @@ impl World {
 
     // Adds a chunk to the world
     pub fn insert_chunk(&mut self, x: i32, z: i32) {
-        self.chunks.insert((x, z), Chunk::generate_chunk(0, 0));
+        self.chunks.insert((x, z), Chunk::generate_chunk(x, z));
     }
 
     // Adds a player to the world
