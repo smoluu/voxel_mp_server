@@ -46,13 +46,19 @@ async fn accept_connections(
     loop {
         let (stream, _) = listener.accept().await.unwrap();
         println!("Client connected!");
-        
+
         let (read_half, write_half) = stream.into_split();
 
         // Wrap write_half in an Arc<Mutex<>> to allow safe access from multiple tasks
         let write_half = Arc::new(Mutex::new(write_half));
 
-        handle_new_connection(read_half, write_half.clone(), client_manager.clone(), world.clone()).await;
+        handle_new_connection(
+            read_half,
+            write_half.clone(),
+            client_manager.clone(),
+            world.clone(),
+        )
+        .await;
     }
 }
 
@@ -87,35 +93,71 @@ async fn handle_new_connection(
 }
 
 const BUFFER_SIZE: usize = 1024; // Adjust buffer size as needed
-const LENGTH_SIZE: usize = 4; // Size of the length header
+const LENGTH_BUFFER_SIZE: usize = 4; // Adjust buffer size as needed
 const IDENTIFIER_SIZE: usize = 1; // Size of the identifier
 
 async fn handle_rx(mut read_half: OwnedReadHalf, client: Arc<RwLock<Client>>) {
-    
-    //buffer for reading data
-    let mut buffer = vec![0u8; BUFFER_SIZE];
-
+    let mut length_buffer = [0u8; LENGTH_BUFFER_SIZE];
     loop {
-        match read_half.read(&mut buffer).await {
-            Ok(0) => {
-                println!("Client disconnected.");
-                break;
-            }
-            Ok(bytes_read) => {
-                println!("Received {} bytes from client.", bytes_read);
-                // Process the received data here
+        // read length header
+        if let Err(e) = read_half.read(&mut length_buffer).await {
+            eprintln!("Error reading length header: {}", e);
+            println!("Length buffer: {:?}", &length_buffer[..length_buffer.len().min(16)]);
 
+            return;
+        }
+
+        // length_buffer to int
+        let total_message_length = u32::from_le_bytes(length_buffer) as usize;
+        println!(
+            "Total message length (including length header): {}",
+            total_message_length
+        );
+
+        let mut received_data = vec![0u8; total_message_length]; // data - 4-byte length
+        let mut total_bytes_read = 0;
+
+        // read for the amount length_buffer says in 1024 byte chunks
+        while total_bytes_read < total_message_length - LENGTH_BUFFER_SIZE {
+            let bytes_to_read = std::cmp::min(1024, total_message_length - 4 - total_bytes_read);
+            match read_half
+                .read(&mut received_data[total_bytes_read..total_bytes_read + bytes_to_read])
+                .await
+            {
+                Ok(bytes_read) => {
+                    if bytes_read == 0 {
+                        eprintln!("Connection closed or read error.");
+                        return; // or break; based on your logic
+                    }
+                    total_bytes_read += bytes_read; // Update the total bytes read
+                }
+                Err(e) => {
+                    // Handle the error accordingly
+                    eprintln!("Error reading data: {}", e);
+                    return;
+                }
             }
-            Err(e) => {
-                println!("Failed to read from socket: {:?}", e);
-                break;
-            }
+        }
+
+        // process data
+        if total_bytes_read == total_message_length - LENGTH_BUFFER_SIZE {
+            // get identifier
+            let identifier = received_data[0] as u8;
+            println!("Full data received: Identifier:{} ({} bytes) ↓ ",identifier, total_bytes_read);
+            println!("Bytes{:?}", &received_data[..received_data.len().min(16)]);
+
+            // Process the received data
+        } else {
+            println!("Failed to read the full message.");
         }
     }
 }
 
-async fn handle_tx(write_half: Arc<Mutex<OwnedWriteHalf>>,client: Arc<RwLock<Client>>, world: Arc<RwLock<World>>) {
-
+async fn handle_tx(
+    write_half: Arc<Mutex<OwnedWriteHalf>>,
+    client: Arc<RwLock<Client>>,
+    world: Arc<RwLock<World>>,
+) {
     let world_read = world.read().await;
     //lock write_half
 
@@ -123,10 +165,8 @@ async fn handle_tx(write_half: Arc<Mutex<OwnedWriteHalf>>,client: Arc<RwLock<Cli
     let client_data = client.read().await.client_to_bytes();
     send_data(write_half.clone(), client_data).await;
 
-
     let chunk_data_1 = world_read.chunk_to_bytes(0, 0);
     send_data(write_half.clone(), chunk_data_1).await;
-
 
     let chunk_data_2 = world_read.chunk_to_bytes(0, 1);
     send_data(write_half.clone(), chunk_data_2).await;
@@ -156,11 +196,9 @@ async fn send_data(write_half: Arc<Mutex<OwnedWriteHalf>>, data: Vec<u8>) {
         offset += bytes_to_send; // Update offset
     }
 
-    println!("Sent {} data ({} bytes) to client.", identifier, data_len);
-    println!("Data contents: {:?}", &data[..data.len().min(16)]);
+    println!("Sent data: Identifier:{} ({} bytes) ↑", identifier, data_len);
+    println!("Bytes{:?}", &data[..data.len().min(16)]);
 }
-
-
 
 async fn world_generation(world: Arc<RwLock<World>>) {
     let mut world = world.write().await;
