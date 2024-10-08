@@ -4,7 +4,9 @@ mod client;
 mod data;
 mod world;
 
+use data::DataIdentifier;
 use std::sync::Arc;
+use std::vec;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
@@ -22,7 +24,6 @@ async fn main() {
     let addr = "127.0.0.1:6969";
     let listener = TcpListener::bind(addr).await.unwrap();
     println!("Server running on {}", addr);
-
     // Start generating chunks in a separate task
     tokio::spawn(world_generation(world.clone()));
 
@@ -88,22 +89,27 @@ async fn handle_new_connection(
     }
 
     // Spawn a task to handle incoming data (read_half) and outgoing data (write_half)
-    tokio::spawn(handle_rx(read_half, client.clone()));
+    tokio::spawn(handle_rx(read_half, client.clone(), world.clone()));
     tokio::spawn(handle_tx(write_half.clone(), client.clone(), world.clone()));
 }
 
 const BUFFER_SIZE: usize = 1024; // Adjust buffer size as needed
 const LENGTH_BUFFER_SIZE: usize = 4; // Adjust buffer size as needed
-const IDENTIFIER_SIZE: usize = 1; // Size of the identifier
 
-async fn handle_rx(mut read_half: OwnedReadHalf, client: Arc<RwLock<Client>>) {
+async fn handle_rx(
+    mut read_half: OwnedReadHalf,
+    client: Arc<RwLock<Client>>,
+    world: Arc<RwLock<World>>,
+) {
     let mut length_buffer = [0u8; LENGTH_BUFFER_SIZE];
     loop {
         // read length header
         if let Err(e) = read_half.read(&mut length_buffer).await {
-            eprintln!("Error reading length header: {}", e);
-            println!("Length buffer: {:?}", &length_buffer[..length_buffer.len().min(16)]);
-
+            println!(
+                "Error reading length header: {} {:?}",
+                e,
+                &length_buffer[..length_buffer.len().min(16)]
+            );
             return;
         }
 
@@ -119,7 +125,8 @@ async fn handle_rx(mut read_half: OwnedReadHalf, client: Arc<RwLock<Client>>) {
 
         // read for the amount length_buffer says in 1024 byte chunks
         while total_bytes_read < total_message_length - LENGTH_BUFFER_SIZE {
-            let bytes_to_read = std::cmp::min(1024, total_message_length - 4 - total_bytes_read);
+            let bytes_to_read =
+                std::cmp::min(BUFFER_SIZE, total_message_length - 4 - total_bytes_read);
             match read_half
                 .read(&mut received_data[total_bytes_read..total_bytes_read + bytes_to_read])
                 .await
@@ -139,17 +146,70 @@ async fn handle_rx(mut read_half: OwnedReadHalf, client: Arc<RwLock<Client>>) {
             }
         }
 
-        // process data
+        // check if all data is received and process data based on identifier
         if total_bytes_read == total_message_length - LENGTH_BUFFER_SIZE {
-            // get identifier
+            // get data identifier (1st byte)
             let identifier = received_data[0] as u8;
-            println!("Full data received: Identifier:{} ({} bytes) ↓ ",identifier, total_bytes_read);
+            println!(
+                "Full data received: Identifier:{} ({} bytes) ↓ ",
+                identifier,
+                total_bytes_read + LENGTH_BUFFER_SIZE
+            );
             println!("Bytes{:?}", &received_data[..received_data.len().min(16)]);
-
-            // Process the received data
+            // spawn tasks for processing data
+            match identifier {
+                1 => tokio::spawn(process_client_data(received_data, client.clone())),
+                2 => tokio::spawn(async {}),
+                3 => tokio::spawn(async { /*process keepalive*/ }),
+                _ => {
+                    println!("Invalid dentifier ({}) cannot process!", identifier);
+                    tokio::spawn(async {}) // Spawn an empty future to match the type
+                }
+            };
         } else {
             println!("Failed to read the full message.");
         }
+    }
+}
+
+async fn process_client_data(data: Vec<u8>, client: Arc<RwLock<Client>>) {
+    let client_data_length: usize = 25;
+    // ensure data is correct length in bytes
+    if data.len() != client_data_length {
+        println!(
+            "\x1b[31m Invalid client_data_length ({} bytes), cancelling porocessing! x1b[0m",
+            client_data_length
+        );
+        return;
+    }
+
+    // deserialize data
+
+    // Read identifier (1 byte)
+    let identifier = data[0];
+    println!("{}", identifier);
+
+    // Read client_id (next 4 bytes, little-endian)
+    let client_id = u32::from_le_bytes(data[1..5].try_into().unwrap());
+
+    // Read position (3 x 4 bytes as f32, little-endian)
+    let x = f32::from_le_bytes(data[5..9].try_into().unwrap());
+    let y = f32::from_le_bytes(data[9..13].try_into().unwrap());
+    let z = f32::from_le_bytes(data[13..17].try_into().unwrap());
+
+    // Read state (next 4 bytes, little-endian)
+    let state = u32::from_le_bytes(data[17..21].try_into().unwrap());
+
+    {
+        let mut client = client.write().await;
+        client.position.0 = x;
+        client.position.1 = y;
+        client.position.2 = z;
+        client.state = state;
+        println!(
+            "Client x{} y{} z{}",
+            client.position.0, client.position.1, client.position.2,
+        )
     }
 }
 
@@ -196,7 +256,10 @@ async fn send_data(write_half: Arc<Mutex<OwnedWriteHalf>>, data: Vec<u8>) {
         offset += bytes_to_send; // Update offset
     }
 
-    println!("Sent data: Identifier:{} ({} bytes) ↑", identifier, data_len);
+    println!(
+        "Sent data: Identifier:{} ({} bytes) ↑",
+        identifier, data_len
+    );
     println!("Bytes{:?}", &data[..data.len().min(16)]);
 }
 
