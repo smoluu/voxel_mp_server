@@ -6,7 +6,7 @@ mod world;
 
 use chunk::CHUNK_SIZE;
 use data::DataIdentifier;
-use std::collections::HashSet;
+use std::collections::{self, HashSet};
 use std::fs::read;
 use std::sync::Arc;
 use std::vec;
@@ -76,7 +76,7 @@ async fn handle_new_connection(
     // Assign a new client ID by locking client_manager
     let client_id = {
         let manager = client_manager.read().await;
-        manager.clients.len() as u32 + 1
+        (manager.clients.len() as u32) + 1
     };
 
     // Create the new client object
@@ -84,6 +84,8 @@ async fn handle_new_connection(
         id: client_id,
         position: (0.0, 102.0, 0.0), // Initial position
         state: 0,
+        chunk_demand: vec![],
+        packet_count_rx: 0,
     }));
 
     // Add the client to the manager
@@ -172,7 +174,7 @@ async fn handle_rx(
                 3 => tokio::spawn(async { /*process keepalive*/ }),
                 _ => {
                     println!("Invalid dentifier ({}) cannot process!", identifier);
-                    tokio::spawn(async {}) // Spawn an empty future to match the type
+                    tokio::spawn(async {})
                 }
             };
         } else {
@@ -182,21 +184,11 @@ async fn handle_rx(
 }
 
 async fn process_client_data(data: Vec<u8>, client: Arc<RwLock<Client>>) {
-    let client_data_length: usize = 25;
     // ensure data is correct length in bytes
-    if data.len() != client_data_length {
-        println!(
-            "\x1b[31m Invalid client_data_length ({} bytes), cancelling porocessing! x1b[0m",
-            client_data_length
-        );
-        return;
-    }
-
-    // deserialize data
+    let data_length = data.len();
 
     // Read identifier (1 byte)
     let identifier = data[0];
-    println!("{}", identifier);
 
     // Read client_id (next 4 bytes, little-endian)
     let client_id = u32::from_le_bytes(data[1..5].try_into().unwrap());
@@ -209,15 +201,28 @@ async fn process_client_data(data: Vec<u8>, client: Arc<RwLock<Client>>) {
     // Read state (next 4 bytes, little-endian)
     let state = u32::from_le_bytes(data[17..21].try_into().unwrap());
 
+    let mut chunk_demand: Vec<(i32, i32)> = Vec::new(); // temp vector to store chunk positions
+                                                        // deserialize received chunks
+    for i in (21..data_length).step_by(8) {
+        if i + 8 > data_length {
+            continue;
+        }
+        let x = i32::from_le_bytes(data[i..i + 4].try_into().unwrap());
+        let z = i32::from_le_bytes(data[i + 4..i + 8].try_into().unwrap());
+        chunk_demand.push((x, z));
+    }
     {
         let mut client = client.write().await;
         client.position.0 = x;
         client.position.1 = y;
         client.position.2 = z;
         client.state = state;
+        client.chunk_demand = chunk_demand;
+        if client.packet_count_rx == 0 {}
+        client.packet_count_rx += 1;
         println!(
-            "Client x{} y{} z{}",
-            client.position.0, client.position.1, client.position.2
+            "Client x{} y{} z{} chunk_demanLEN{}",
+            client.position.0, client.position.1, client.position.2, client.chunk_demand.len()
         );
     }
 }
@@ -227,18 +232,38 @@ async fn handle_tx(
     client: Arc<RwLock<Client>>,
     world: Arc<RwLock<World>>,
 ) {
-    let world_read = world.read().await;
+    {
+        let client_data = client.read().await.client_to_bytes();
+        send_data(write_half.clone(), client_data).await;
+    }
+
+    loop {
+        let mut remaining_chunks = Vec::new();
+        let chunk_demand = {
+            let client = client.read().await;
+            client.chunk_demand.clone()
+        };
+
+        // send chunks on demand
+        for chunk in chunk_demand {
+            //check if chunk is generated
+            let world = world.read().await;
+            //println!("debug {:?}", chunk);
+            if world.chunks.contains_key(&chunk) {
+                let chunk_data = world.chunk_to_bytes(chunk.0, chunk.1);
+                send_data(write_half.clone(), chunk_data).await;
+            } else {
+                // chunk that were not found
+                remaining_chunks.push(chunk);
+            }
+        }
+        {
+            let mut client = client.write().await;
+            client.chunk_demand = remaining_chunks;
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
     //lock write_half
-
-    // Serialize the client data and send it to the client
-    let client_data = client.read().await.client_to_bytes();
-    send_data(write_half.clone(), client_data).await;
-
-    let chunk_data_1 = world_read.chunk_to_bytes(0, 0);
-    send_data(write_half.clone(), chunk_data_1).await;
-
-    let chunk_data_2 = world_read.chunk_to_bytes(0, 1);
-    send_data(write_half.clone(), chunk_data_2).await;
 }
 
 async fn send_data(write_half: Arc<Mutex<OwnedWriteHalf>>, data: Vec<u8>) {
@@ -273,55 +298,38 @@ async fn send_data(write_half: Arc<Mutex<OwnedWriteHalf>>, data: Vec<u8>) {
 }
 
 async fn world_generation(world: Arc<RwLock<World>>, client_manager: Arc<RwLock<ClientManager>>) {
-    static CHUNK_DISTANCE: i32 = 10;
     let mut generated_chunks: HashSet<(i32, i32)> = HashSet::new(); // HashSet to track generated chunks
     loop {
+        {
+            //calculate demand
+            let mut client_manager = client_manager.write().await;
+            client_manager.calculate_demanded_chunks().await;
+        }
         //TODO add notify so loop doesnt run if no clients are connected
-
-        // get all client positions
-        let client_positions: Vec<(f32, f32, f32)> = {
-            let client_manager = client_manager.read().await; //read locjk
-            client_manager.get_all_client_positions().await
+        let client_count = {
+            let client_manager = client_manager.read().await;
+            client_manager.clients.len()
         };
-        if client_positions.is_empty() {
+        if client_count == 0 {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
             continue; // No clients, continue the loop
         }
-        // calculate occupied chunks (maybe shoold be calculated on client)
-        let mut occupied_chunks: Vec<(i32, i32)> = Vec::with_capacity(client_positions.len());
-        for position in client_positions {
-            //x
-            let x = (position.0 / 64.0).floor() as i32;
-            //z
-            let z = (position.1 / 64.0).floor() as i32;
-            occupied_chunks.push((x, z));
-        }
 
-        //calculate chunk demand from occupied_chunks
-        let mut chunk_demand: Vec<(i32, i32)> = vec![];
-        for chunk in occupied_chunks {
-            for x in -CHUNK_DISTANCE / 2..=CHUNK_DISTANCE / 2 {
-                for z in -CHUNK_DISTANCE / 2..=CHUNK_DISTANCE / 2 {
-                    let demanded_chunk = (chunk.0 + x, chunk.1 + z);
-                    // check if chunk is already generated
-                    if (!generated_chunks.contains(&demanded_chunk)) {
-                        chunk_demand.push((chunk.0 + x, chunk.1 + z))
-                    }
-                }
-            }
-        }
-        println!("chunk_demand: {:?}", chunk_demand);
-        //generate the demandded chunks
-        {
+        // get all demanded chunks
+        let demanded_chunks: HashSet<(i32, i32)> = {
+            let client_manager = client_manager.read().await;
+            client_manager.demanded_chunks.clone()
+        };
+
+        //generate the demanded chunks
+        for chunk in demanded_chunks {
             let mut world = world.write().await;
-            for position in &chunk_demand {
-                world.insert_chunk(position.0, position.1);
-                generated_chunks.insert(*position);
+            if !generated_chunks.contains(&chunk) {
+                world.insert_chunk(chunk.0, chunk.1);
+                generated_chunks.insert(chunk);
             }
         }
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
-
 }

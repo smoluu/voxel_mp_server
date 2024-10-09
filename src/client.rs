@@ -1,6 +1,7 @@
 use crate::data::DataIdentifier;
-use std::collections::HashMap;
+use std::collections::{hash_set, HashMap, HashSet};
 use std::sync::Arc;
+use std::vec;
 use tokio::sync::RwLock;
 
 #[derive()]
@@ -8,6 +9,8 @@ pub struct Client {
     pub id: u32,                   // Unique ID for the client
     pub position: (f32, f32, f32), // client's position in the world
     pub state: u32,
+    pub chunk_demand: Vec<(i32, i32)>,
+    pub packet_count_rx: u64,
 }
 
 impl Client {
@@ -42,12 +45,14 @@ impl Client {
 
 pub struct ClientManager {
     pub clients: HashMap<u32, Arc<RwLock<Client>>>,
+    pub demanded_chunks: HashSet<(i32, i32)>
 }
 
 impl ClientManager {
     pub fn new() -> Self {
         ClientManager {
             clients: HashMap::new(),
+            demanded_chunks: HashSet::new(),
         }
     }
     pub async fn add_client(&mut self, client: Arc<RwLock<Client>>) {
@@ -63,16 +68,30 @@ impl ClientManager {
         self.clients.get(&client_id).cloned()
     }
 
-pub async fn get_all_client_positions(&self) -> Vec<(f32, f32, f32)> {
-    let mut positions = Vec::new();
+    pub async fn get_all_client_positions(&self) -> Vec<(f32, f32, f32)> {
+        let mut positions = Vec::new();
 
-    // Iterate through all clients in the HashMap
-    for client_arc in self.clients.values() {
-        let client = client_arc.read().await; // Acquire read lock on the client
-        positions.push(client.position); // Collect client position
+        // Iterate through all clients in the HashMap
+        for client_arc in self.clients.values() {
+            let client = client_arc.read().await; // Acquire read lock on the client
+            positions.push(client.position); // Collect client position
+        }
+
+        positions
     }
-
-    positions
-}
-
+    //TODO sort hashset so closest chunks to clients are first in the set
+    //returns a hashset of chunk x,z values based on clients demands
+    pub async fn calculate_demanded_chunks(&mut self) -> HashSet<(i32, i32)> {
+        let mut all_demanded_chunks = Vec::new();
+        // Iterate through all clients in the HashMap
+        for client_arc in self.clients.values() {
+            let client = client_arc.read().await;
+            all_demanded_chunks.extend(client.chunk_demand.clone());
+        }
+        //remove duplicates
+        for chunk in all_demanded_chunks {
+            self.demanded_chunks.insert(chunk);
+        }
+        self.demanded_chunks.clone()
+    }
 }
