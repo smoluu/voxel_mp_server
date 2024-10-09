@@ -4,7 +4,10 @@ mod client;
 mod data;
 mod world;
 
+use chunk::CHUNK_SIZE;
 use data::DataIdentifier;
+use std::collections::HashSet;
+use std::fs::read;
 use std::sync::Arc;
 use std::vec;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf};
@@ -13,7 +16,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, RwLock};
 
 use client::{Client, ClientManager};
-use world::World;
+use world::{Player, World};
 
 #[tokio::main]
 async fn main() {
@@ -25,7 +28,7 @@ async fn main() {
     let listener = TcpListener::bind(addr).await.unwrap();
     println!("Server running on {}", addr);
     // Start generating chunks in a separate task
-    tokio::spawn(world_generation(world.clone()));
+    tokio::spawn(world_generation(world.clone(), client_manager.clone()));
 
     // Spawn task to accept connections
     tokio::spawn(accept_connections(
@@ -60,6 +63,7 @@ async fn accept_connections(
             world.clone(),
         )
         .await;
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 }
 
@@ -86,6 +90,11 @@ async fn handle_new_connection(
     {
         let mut manager = client_manager.write().await;
         manager.add_client(client.clone()).await;
+    }
+    // add player to world
+    {
+        let mut world = world.write().await;
+        world.add_player(Player::new(client_id, (0.0, 102.0, 0.0), 0));
     }
 
     // Spawn a task to handle incoming data (read_half) and outgoing data (write_half)
@@ -208,8 +217,8 @@ async fn process_client_data(data: Vec<u8>, client: Arc<RwLock<Client>>) {
         client.state = state;
         println!(
             "Client x{} y{} z{}",
-            client.position.0, client.position.1, client.position.2,
-        )
+            client.position.0, client.position.1, client.position.2
+        );
     }
 }
 
@@ -263,11 +272,56 @@ async fn send_data(write_half: Arc<Mutex<OwnedWriteHalf>>, data: Vec<u8>) {
     println!("Bytes{:?}", &data[..data.len().min(16)]);
 }
 
-async fn world_generation(world: Arc<RwLock<World>>) {
-    let mut world = world.write().await;
-    world.insert_chunk(0, 0);
-    world.insert_chunk(0, 1);
+async fn world_generation(world: Arc<RwLock<World>>, client_manager: Arc<RwLock<ClientManager>>) {
+    static CHUNK_DISTANCE: i32 = 10;
+    let mut generated_chunks: HashSet<(i32, i32)> = HashSet::new(); // HashSet to track generated chunks
+    loop {
+        //TODO add notify so loop doesnt run if no clients are connected
 
-    //check demand for chunks
-    // generate chunks if they dont exists
+        // get all client positions
+        let client_positions: Vec<(f32, f32, f32)> = {
+            let client_manager = client_manager.read().await; //read locjk
+            client_manager.get_all_client_positions().await
+        };
+        if client_positions.is_empty() {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+            continue; // No clients, continue the loop
+        }
+        // calculate occupied chunks (maybe shoold be calculated on client)
+        let mut occupied_chunks: Vec<(i32, i32)> = Vec::with_capacity(client_positions.len());
+        for position in client_positions {
+            //x
+            let x = (position.0 / 64.0).floor() as i32;
+            //z
+            let z = (position.1 / 64.0).floor() as i32;
+            occupied_chunks.push((x, z));
+        }
+
+        //calculate chunk demand from occupied_chunks
+        let mut chunk_demand: Vec<(i32, i32)> = vec![];
+        for chunk in occupied_chunks {
+            for x in -CHUNK_DISTANCE / 2..=CHUNK_DISTANCE / 2 {
+                for z in -CHUNK_DISTANCE / 2..=CHUNK_DISTANCE / 2 {
+                    let demanded_chunk = (chunk.0 + x, chunk.1 + z);
+                    // check if chunk is already generated
+                    if (!generated_chunks.contains(&demanded_chunk)) {
+                        chunk_demand.push((chunk.0 + x, chunk.1 + z))
+                    }
+                }
+            }
+        }
+        println!("chunk_demand: {:?}", chunk_demand);
+        //generate the demandded chunks
+        {
+            let mut world = world.write().await;
+            for position in &chunk_demand {
+                world.insert_chunk(position.0, position.1);
+                generated_chunks.insert(*position);
+            }
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
 }

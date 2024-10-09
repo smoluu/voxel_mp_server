@@ -41,7 +41,7 @@ impl Client {
 }
 
 pub struct ClientManager {
-    pub clients: HashMap<u32, Arc<RwLock<Client>>>, // Player ID mapped to Player
+    pub clients: HashMap<u32, Arc<RwLock<Client>>>,
 }
 
 impl ClientManager {
@@ -62,4 +62,17 @@ impl ClientManager {
     pub fn get_client(&self, client_id: u32) -> Option<Arc<RwLock<Client>>> {
         self.clients.get(&client_id).cloned()
     }
+
+pub async fn get_all_client_positions(&self) -> Vec<(f32, f32, f32)> {
+    let mut positions = Vec::new();
+
+    // Iterate through all clients in the HashMap
+    for client_arc in self.clients.values() {
+        let client = client_arc.read().await; // Acquire read lock on the client
+        positions.push(client.position); // Collect client position
+    }
+
+    positions
+}
+
 }

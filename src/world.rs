@@ -1,18 +1,20 @@
 use crate::{chunk::Chunk, data::DataIdentifier};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::{collections::HashMap};
 
 // Represents a player in the world
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Player {
-    pub id: u32,                   // Unique ID for the player
-    pub position: (f32, f32, f32), // Player's position in the world
+    pub id: u32, // Unique ID for the player
+    pub position: (f32, f32, f32),
+    pub state: u32,
+    // Player's position in the world
 }
 
 impl Player {
     // Constructor for creating a new Player
-    pub fn new(id: u32, position: (f32, f32, f32)) -> Self {
-        Player { id, position }
+    pub fn new(id: u32, position: (f32, f32, f32), state : u32) -> Self {
+        Player { id, position, state}
     }
 }
 
@@ -54,7 +56,6 @@ impl World {
 
     // byte[0] identifier, byte[1],[2] x,z,
     pub fn chunk_to_bytes(&self, x: i32, z: i32) -> Vec<u8> {
-
         let mut data = Vec::new();
         // pre allocate length header bytes
         data.resize(4, 1);
@@ -62,7 +63,7 @@ impl World {
         // Add identifier for chunk data (byte index 4)
         let data_identifier = DataIdentifier::ChunkData;
         data.push(data_identifier as u8);
-        
+
         // Serialize coordinates (byte index 5-12)
         let chunk = self.chunks.get(&(x, z)).unwrap().clone();
         data.extend(chunk.coords.0.to_le_bytes()); // X coordinate
