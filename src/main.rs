@@ -2,13 +2,13 @@
 mod chunk;
 mod client;
 mod data;
+mod metrics;
 mod world;
 
-use chunk::CHUNK_SIZE;
-use data::DataIdentifier;
-use std::collections::{self, HashSet};
-use std::fs::read;
+use metrics::*;
+use std::collections::{HashSet};
 use std::sync::Arc;
+use std::time::Instant;
 use std::vec;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
@@ -27,6 +27,8 @@ async fn main() {
     let addr = "127.0.0.1:6969";
     let listener = TcpListener::bind(addr).await.unwrap();
     println!("Server running on {}", addr);
+    // start metrics endpoint
+    tokio::spawn(metrics::start());
     // Start generating chunks in a separate task
     tokio::spawn(world_generation(world.clone(), client_manager.clone()));
 
@@ -87,7 +89,8 @@ async fn handle_new_connection(
         chunk_demand: vec![],
         packet_count_rx: 0,
     }));
-
+    //metrics
+    CLIENT_COUNT.inc();
     // Add the client to the manager
     {
         let mut manager = client_manager.write().await;
@@ -100,8 +103,13 @@ async fn handle_new_connection(
     }
 
     // Spawn a task to handle incoming data (read_half) and outgoing data (write_half)
-    tokio::spawn(handle_rx(read_half, client.clone(), world.clone()));
-    tokio::spawn(handle_tx(write_half.clone(), client.clone(), world.clone()));
+    tokio::spawn(handle_rx(
+        read_half,
+        client.clone(),
+        world.clone(),
+        client_manager,
+    ));
+    tokio::spawn(handle_tx(write_half, client.clone(), world.clone()));
 }
 
 const BUFFER_SIZE: usize = 1024; // Adjust buffer size as needed
@@ -111,6 +119,7 @@ async fn handle_rx(
     mut read_half: OwnedReadHalf,
     client: Arc<RwLock<Client>>,
     world: Arc<RwLock<World>>,
+    client_manager: Arc<RwLock<ClientManager>>,
 ) {
     let mut length_buffer = [0u8; LENGTH_BUFFER_SIZE];
     loop {
@@ -144,7 +153,13 @@ async fn handle_rx(
             {
                 Ok(bytes_read) => {
                     if bytes_read == 0 {
-                        eprintln!("Connection closed or read error.");
+                        let client_id = client.read().await.id;
+                        //remove client from client_manager
+                        let mut manager = client_manager.write().await;
+                        manager.remove_client(client_id);
+                        eprintln!("Connection closed or read error on client_id:{}", client_id);
+                        CLIENT_COUNT.dec();
+
                         return; // or break; based on your logic
                     }
                     total_bytes_read += bytes_read; // Update the total bytes read
@@ -222,8 +237,13 @@ async fn process_client_data(data: Vec<u8>, client: Arc<RwLock<Client>>) {
         client.packet_count_rx += 1;
         println!(
             "Client x{} y{} z{} chunk_demanLEN{}",
-            client.position.0, client.position.1, client.position.2, client.chunk_demand.len()
+            client.position.0,
+            client.position.1,
+            client.position.2,
+            client.chunk_demand.len()
         );
+        //metrics
+        NETWORK_BYTES_INGRESS_TOTAL.inc_by(data_length as u64);
     }
 }
 
@@ -289,6 +309,8 @@ async fn send_data(write_half: Arc<Mutex<OwnedWriteHalf>>, data: Vec<u8>) {
 
         offset += bytes_to_send; // Update offset
     }
+    //metrics
+    NETWORK_BYTES_EGRESS_TOTAL.inc_by(data_len as u64);
 
     println!(
         "Sent data: Identifier:{} ({} bytes) ↑",
@@ -325,8 +347,12 @@ async fn world_generation(world: Arc<RwLock<World>>, client_manager: Arc<RwLock<
         for chunk in demanded_chunks {
             let mut world = world.write().await;
             if !generated_chunks.contains(&chunk) {
+                let timer = Instant::now();
                 world.insert_chunk(chunk.0, chunk.1);
                 generated_chunks.insert(chunk);
+                //metrics
+                CHUNK_GENERATION_TIME.observe(timer.elapsed().as_millis() as f64);
+                CHUNK_GENERATED_COUNTER.inc();
             }
         }
 

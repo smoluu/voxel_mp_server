@@ -1,0 +1,8 @@
+global:
+  scrape_interval: 5s  # Set the scrape interval to 5 seconds
+  evaluation_interval: 5s  # Evaluation interval for rules (if any)
+
+scrape_configs:
+  - job_name: 'rust_voxel_server_metrics'
+    static_configs:
+      - targets: ['localhost:8080']  # Replace 8080 with the actual port you're using for metrics
