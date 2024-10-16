@@ -5,14 +5,15 @@ mod data;
 mod metrics;
 mod world;
 
+use data::DataIdentifier;
 use metrics::*;
-use std::collections::{HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
 use std::vec;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 use tokio::sync::{Mutex, RwLock};
 
 use client::{Client, ClientManager};
@@ -253,6 +254,7 @@ async fn handle_tx(
     world: Arc<RwLock<World>>,
 ) {
     {
+        // this is for initializing the client
         let client_data = client.read().await.client_to_bytes();
         send_data(write_half.clone(), client_data).await;
     }
@@ -270,10 +272,10 @@ async fn handle_tx(
             let world = world.read().await;
             //println!("debug {:?}", chunk);
             if world.chunks.contains_key(&chunk) {
-                let chunk_data = world.chunk_to_bytes(chunk.0, chunk.1);
+                let chunk_data = world.chunk_to_bytes_rle(chunk.0, chunk.1);
                 send_data(write_half.clone(), chunk_data).await;
             } else {
-                // chunk that were not found
+                // chunk that were not yet generated
                 remaining_chunks.push(chunk);
             }
         }

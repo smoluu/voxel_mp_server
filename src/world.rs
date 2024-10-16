@@ -1,6 +1,9 @@
-use crate::{chunk::Chunk, data::DataIdentifier};
+use crate::{
+    chunk::{Chunk, Voxel},
+    data::DataIdentifier,
+};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap};
+use std::collections::HashMap;
 
 // Represents a player in the world
 #[derive(Serialize, Deserialize, Clone)]
@@ -13,8 +16,12 @@ pub struct Player {
 
 impl Player {
     // Constructor for creating a new Player
-    pub fn new(id: u32, position: (f32, f32, f32), state : u32) -> Self {
-        Player { id, position, state}
+    pub fn new(id: u32, position: (f32, f32, f32), state: u32) -> Self {
+        Player {
+            id,
+            position,
+            state,
+        }
     }
 }
 
@@ -54,28 +61,44 @@ impl World {
         self.players.get(&id)
     }
 
-    // byte[0] identifier, byte[1],[2] x,z,
-    pub fn chunk_to_bytes(&self, x: i32, z: i32) -> Vec<u8> {
+    // reuturns vec of bytes holding data for x,z chunk
+    // | Bytes 1-4      | Byte 5  | Bytes 6-9   | Bytes 10-13  | Bytes 14+ |
+    // | Length (TBD)   | 02      | X Coord     | Z Coord      | RLE pairs... |
+    pub fn chunk_to_bytes_rle(&self, x: i32, z: i32) -> Vec<u8> {
         let mut data = Vec::new();
-        // pre allocate length header bytes
+
+        // pre allocate length header bytes (byte index 0-3)
         data.resize(4, 1);
 
         // Add identifier for chunk data (byte index 4)
         let data_identifier = DataIdentifier::ChunkData;
         data.push(data_identifier as u8);
 
-        // Serialize coordinates (byte index 5-12)
+        // Serialize coordinates (byte index 5-8 9-12)
         let chunk = self.chunks.get(&(x, z)).unwrap().clone();
         data.extend(chunk.coords.0.to_le_bytes()); // X coordinate
         data.extend(chunk.coords.1.to_le_bytes()); // Z coordinate
 
-        // Serialize voxel data
+        // Serialize voxel data using RLE (Run Length Encoding) (remaining bytes)
+        let mut prev_voxel: Option<Voxel> = None;
+        let mut run_length: u8 = 0;
+
         for voxel in chunk.voxels {
-            data.extend(&voxel.index.to_le_bytes()); // Voxel index (4 bytes)
-            data.push(voxel.id); // Voxel ID (1 byte)
+            if let Some(prev_voxel) = &prev_voxel{
+                // increase run length if voxel is same as previous
+                if voxel.id == prev_voxel.id && run_length < 255{
+                    run_length += 1;
+                    continue;
+                }
+                // write the RLE pair
+                data.push(run_length); // run length (1 byte)
+                data.push(prev_voxel.id); // Voxel ID (1 byte)
+            }
+            prev_voxel = Some(voxel);
+            run_length = 1; // Reset run length for the new voxel type
         }
 
-        // serialize length of the data
+        // serialize length of the data to first 4 bytes
         let length = data.len() as u32;
         let length_bytes = length.to_le_bytes();
         // add length to first 4 bytes of data

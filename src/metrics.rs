@@ -31,11 +31,11 @@ pub async fn start() {
     tokio::spawn(track_bytes_per_second());
 
     // Bind the TCP listener asynchronously
-    let listener = TcpListener::bind("0.0.0.0:8080")
+    let listener = TcpListener::bind("127.0.0.1:8080")
         .await
         .expect("Failed to bind to address");
 
-    println!("Metrics server listening on port 8080");
+    println!("Metrics server listening on 127.0.0.1:8080");
 
     loop {
         // Accept incoming connections asynchronously
@@ -102,7 +102,6 @@ async fn handle_connection(mut stream: TcpStream, request_counter: Counter) {
         }
     }
 
-    // Flushing the stream is usually not necessary, as write_all will flush it.
 }
 
 async fn track_bytes_per_second() {
