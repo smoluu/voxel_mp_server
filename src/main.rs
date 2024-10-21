@@ -5,7 +5,10 @@ mod data;
 mod metrics;
 mod world;
 
-use data::DataIdentifier;
+use client::{Client, ClientManager};
+use data::{process_client_data, DataIdentifier};
+use futures_util::stream::StreamExt;
+use futures_util::SinkExt;
 use metrics::*;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -15,8 +18,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, RwLock};
-
-use client::{Client, ClientManager};
+use tokio_tungstenite::{accept_async, tungstenite::Message, WebSocketStream};
 use world::{Player, World};
 
 #[tokio::main]
@@ -24,10 +26,15 @@ async fn main() {
     let world = Arc::new(RwLock::new(World::new()));
     let client_manager = Arc::new(RwLock::new(ClientManager::new()));
 
-    // Set up TCP listener for client connections
+    // Set up TCP & Websocket listener for client connections
     let addr = "127.0.0.1:6969";
     let listener = TcpListener::bind(addr).await.unwrap();
     println!("Server running on {}", addr);
+
+    let ws_addr = "127.0.0.1:6970"; // WebSocket port
+    let ws_listener = TcpListener::bind(ws_addr).await.unwrap();
+    println!("WebSocket server running on {}", ws_addr);
+
     // start metrics endpoint
     tokio::spawn(metrics::start());
     // Start generating chunks in a separate task
@@ -36,6 +43,7 @@ async fn main() {
     // Spawn task to accept connections
     tokio::spawn(accept_connections(
         listener,
+        ws_listener,
         client_manager.clone(),
         world.clone(),
     ));
@@ -47,27 +55,54 @@ async fn main() {
 
 async fn accept_connections(
     listener: TcpListener,
+    ws_listener: TcpListener,
     client_manager: Arc<RwLock<ClientManager>>,
     world: Arc<RwLock<World>>,
 ) {
-    loop {
-        let (stream, _) = listener.accept().await.unwrap();
-        println!("Client connected!");
+    // Spawn a task to handle TCP connections
+    let tcp_listener_task = tokio::spawn(async move {
+        loop {
+            match listener.accept().await {
+                Ok((stream, _)) => {
+                    println!("TCP Client connected!");
 
-        let (read_half, write_half) = stream.into_split();
+                    let (read_half, write_half) = stream.into_split();
+                    let write_half = Arc::new(Mutex::new(write_half));
 
-        // Wrap write_half in an Arc<Mutex<>> to allow safe access from multiple tasks
-        let write_half = Arc::new(Mutex::new(write_half));
+                    // Handle the new TCP connection
+                    handle_new_connection(
+                        read_half,
+                        write_half.clone(),
+                        client_manager.clone(),
+                        world.clone(),
+                    ).await;
+                }
+                Err(e) => {
+                    eprintln!("Failed to accept TCP connection: {:?}", e);
+                }
+            }
+        }
+    });
+       // Spawn a task to handle WebSocket connections
+    let ws_listener_task = tokio::spawn(async move {
+        loop {
+            match ws_listener.accept().await {
+                Ok((stream, _)) => {
+                    println!("WebSocket Client connected!");
+                    // Handle the WebSocket connection
+                    let ws_stream = tokio_tungstenite::accept_async(stream)
+                        .await
+                        .expect("Error during WebSocket handshake");
 
-        handle_new_connection(
-            read_half,
-            write_half.clone(),
-            client_manager.clone(),
-            world.clone(),
-        )
-        .await;
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
+                    // Spawn a task to handle the WebSocket communication
+                    tokio::spawn(handle_websocket(ws_stream));
+                }
+                Err(e) => {
+                    eprintln!("Failed to accept WebSocket connection: {:?}", e);
+                }
+            }
+        }
+    });
 }
 
 async fn handle_new_connection(
@@ -90,6 +125,7 @@ async fn handle_new_connection(
         chunk_demand: vec![],
         packet_count_rx: 0,
     }));
+    println!("New client created");
     //metrics
     CLIENT_COUNT.inc();
     // Add the client to the manager
@@ -196,55 +232,6 @@ async fn handle_rx(
         } else {
             println!("Failed to read the full message.");
         }
-    }
-}
-
-async fn process_client_data(data: Vec<u8>, client: Arc<RwLock<Client>>) {
-    // ensure data is correct length in bytes
-    let data_length = data.len();
-
-    // Read identifier (1 byte)
-    let identifier = data[0];
-
-    // Read client_id (next 4 bytes, little-endian)
-    let client_id = u32::from_le_bytes(data[1..5].try_into().unwrap());
-
-    // Read position (3 x 4 bytes as f32, little-endian)
-    let x = f32::from_le_bytes(data[5..9].try_into().unwrap());
-    let y = f32::from_le_bytes(data[9..13].try_into().unwrap());
-    let z = f32::from_le_bytes(data[13..17].try_into().unwrap());
-
-    // Read state (next 4 bytes, little-endian)
-    let state = u32::from_le_bytes(data[17..21].try_into().unwrap());
-
-    let mut chunk_demand: Vec<(i32, i32)> = Vec::new(); // temp vector to store chunk positions
-                                                        // deserialize received chunks
-    for i in (21..data_length).step_by(8) {
-        if i + 8 > data_length {
-            continue;
-        }
-        let x = i32::from_le_bytes(data[i..i + 4].try_into().unwrap());
-        let z = i32::from_le_bytes(data[i + 4..i + 8].try_into().unwrap());
-        chunk_demand.push((x, z));
-    }
-    {
-        let mut client = client.write().await;
-        client.position.0 = x;
-        client.position.1 = y;
-        client.position.2 = z;
-        client.state = state;
-        client.chunk_demand = chunk_demand;
-        if client.packet_count_rx == 0 {}
-        client.packet_count_rx += 1;
-        println!(
-            "Client x{} y{} z{} chunk_demanLEN{}",
-            client.position.0,
-            client.position.1,
-            client.position.2,
-            client.chunk_demand.len()
-        );
-        //metrics
-        NETWORK_BYTES_INGRESS_TOTAL.inc_by(data_length as u64);
     }
 }
 
@@ -360,4 +347,61 @@ async fn world_generation(world: Arc<RwLock<World>>, client_manager: Arc<RwLock<
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
+}
+
+async fn handle_websocket(ws_stream: WebSocketStream<tokio::net::TcpStream>) {
+    let (mut ws_tx, mut ws_rx) = ws_stream.split();
+
+    // Connect to the TCP server
+    let tcp_stream = match tokio::net::TcpStream::connect("127.0.0.1:6969").await {
+        Ok(stream) => {
+            println!("Connected to TCP server!");
+            stream
+        }
+        Err(e) => {
+            eprintln!("Failed to connect to TCP server: {:?}", e);
+            return; // Exit if unable to connect
+        }
+    };
+    let (tcp_read_half, mut tcp_write_half) = tcp_stream.into_split();
+
+    let tcp_to_ws = tokio::spawn(async move {
+        
+        let mut tcp_reader = tokio::io::BufReader::new(tcp_read_half);
+        let mut buffer = vec![0; 1024]; // Buffer for reading TCP data
+        loop {
+            match tcp_reader.read(&mut buffer).await {
+                Ok(0) => break, // Connection closed
+                Ok(n) => {
+                    // Send TCP data to WebSocket client
+                    if let Err(e) = ws_tx.send(Message::Binary(buffer[..n].to_vec())).await {
+                        eprintln!("Error sending to WebSocket: {:?}", e);
+                        break;
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error reading from TCP: {:?}", e);
+                    break;
+                }
+            }
+        }
+    });
+
+    while let Some(msg) = ws_rx.next().await {
+        match msg {
+            Ok(Message::Binary(bin)) => {
+                if let Err(e) = tcp_write_half.write_all(&bin).await {
+                    eprintln!("Error sending binary data to TCP: {:?}", e);
+                    break;
+                }
+            }
+            Err(e) => {
+                eprintln!("WebSocket error: {:?}", e);
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    println!("WebSocket connection closed.");
 }
