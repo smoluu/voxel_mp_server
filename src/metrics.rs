@@ -5,9 +5,11 @@ use prometheus::{
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time;
+use memory_stats::memory_stats;
 
 lazy_static::lazy_static! {
     pub static ref SERVER_UPTIME: IntCounter = register_int_counter!("server_uptime"," ").unwrap();
+    pub static ref SERVER_RAM_USAGE:Gauge = register_gauge!("server_ram_usage"," ").unwrap();
     pub static ref CLIENT_COUNT:Gauge = register_gauge!("client_count"," ").unwrap();
     pub static ref CHUNK_GENERATED_COUNTER: IntCounter = register_int_counter!("chunk_generated_after_restart"," ").unwrap();
     pub static ref CHUNK_GENERATION_TIME: Histogram = register_histogram!("chunk_generation_time"," ").unwrap();
@@ -29,6 +31,8 @@ pub async fn start() {
 
     // Start tracking bytes sent per second
     tokio::spawn(track_bytes_per_second());
+    // start tracking ram usage
+    tokio::spawn(track_ram_usage());
 
     // Bind the TCP listener asynchronously
     let listener = TcpListener::bind("127.0.0.1:8080")
@@ -124,5 +128,13 @@ async fn track_bytes_per_second() {
         // Observe the bytes sent and received
         NETWORK_BYTES_EGRESS_S.set(bytes_sent_last_second as f64);
         NETWORK_BYTES_INGRESS_S.set(bytes_received_last_second as f64);
+    }
+}
+async fn track_ram_usage(){
+    loop {
+        time::sleep(time::Duration::from_secs(1)).await;
+        if let Some(usage) = memory_stats() {
+            SERVER_RAM_USAGE.set(usage.physical_mem as f64);
+        }
     }
 }
