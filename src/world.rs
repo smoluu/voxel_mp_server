@@ -1,21 +1,23 @@
 use crate::{
     chunk::{Chunk, Voxel},
+    client::ClientManager,
     data::DataIdentifier,
+    CHUNK_GENERATED_COUNTER, CHUNK_GENERATION_TIME,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use std::time::Instant;
+use tokio::sync::RwLock;
 
-// Represents a player in the world
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Player {
     pub id: u32, // Unique ID for the player
     pub position: (f32, f32, f32),
     pub state: u32,
-    // Player's position in the world
 }
 
 impl Player {
-    // Constructor for creating a new Player
     pub fn new(id: u32, position: (f32, f32, f32), state: u32) -> Self {
         Player {
             id,
@@ -25,7 +27,6 @@ impl Player {
     }
 }
 
-// Represents the world containing chunks, players, and client connections
 #[derive(Serialize, Deserialize)]
 pub struct World {
     pub chunks: HashMap<(i32, i32), Chunk>, // 2D map of chunks identified by their coordinates (x, z)
@@ -33,7 +34,6 @@ pub struct World {
 }
 
 impl World {
-    // Creates a new World instance
     pub fn new() -> Self {
         World {
             players: HashMap::new(),
@@ -41,69 +41,105 @@ impl World {
         }
     }
 
-    // Adds a chunk to the world
-    pub fn insert_chunk(&mut self, x: i32, z: i32) {
-        self.chunks.insert((x, z), Chunk::generate_chunk(x, z));
-    }
-
-    // Adds a player to the world
     pub fn add_player(&mut self, player: Player) {
         self.players.insert(player.id, player);
     }
 
-    // Example: Gets a chunk by its coordinates
     pub fn get_chunk(&self, x: i32, z: i32) -> Option<&Chunk> {
         self.chunks.get(&(x, z))
     }
 
-    // Example: Gets a player by their ID
     pub fn get_player(&self, id: u32) -> Option<&Player> {
         self.players.get(&id)
     }
 
-    // reuturns vec of bytes holding data for x,z chunk
-    // | Bytes 1-4      | Byte 5  | Bytes 6-9   | Bytes 10-13  | Bytes 14+ |
-    // | Length (TBD)   | 02      | X Coord     | Z Coord      | RLE pairs... |
     pub fn chunk_to_bytes_rle(&self, x: i32, z: i32) -> Vec<u8> {
         let mut data = Vec::new();
+        data.resize(4, 1); // Pre-allocate length header bytes (byte index 0-3)
 
-        // pre allocate length header bytes (byte index 0-3)
-        data.resize(4, 1);
-
-        // Add identifier for chunk data (byte index 4)
         let data_identifier = DataIdentifier::ChunkData;
         data.push(data_identifier as u8);
 
-        // Serialize coordinates (byte index 5-8 9-12)
         let chunk = self.chunks.get(&(x, z)).unwrap().clone();
-        data.extend(chunk.coords.0.to_le_bytes()); // X coordinate
-        data.extend(chunk.coords.1.to_le_bytes()); // Z coordinate
+        data.extend(chunk.coords.0.to_le_bytes());
+        data.extend(chunk.coords.1.to_le_bytes());
 
-        // Serialize voxel data using RLE (Run Length Encoding) (remaining bytes)
         let mut prev_voxel: Option<Voxel> = None;
         let mut run_length: u8 = 0;
 
         for voxel in chunk.voxels {
-            if let Some(prev_voxel) = &prev_voxel{
-                // increase run length if voxel is same as previous
-                if voxel.id == prev_voxel.id && run_length < 255{
+            if let Some(prev_voxel) = &prev_voxel {
+                if voxel.id == prev_voxel.id && run_length < 255 {
                     run_length += 1;
                     continue;
                 }
-                // write the RLE pair
-                data.push(run_length); // run length (1 byte)
-                data.push(prev_voxel.id); // Voxel ID (1 byte)
+
+                data.push(run_length);
+                data.push(prev_voxel.id);
             }
             prev_voxel = Some(voxel);
-            run_length = 1; // Reset run length for the new voxel type
+            run_length = 1;
         }
 
-        // serialize length of the data to first 4 bytes
         let length = data.len() as u32;
         let length_bytes = length.to_le_bytes();
-        // add length to first 4 bytes of data
         data[..4].copy_from_slice(&length_bytes);
 
         data
+    }
+
+    // Function to handle world generation based on demanded chunks
+    pub async fn world_generation(
+        world: Arc<RwLock<World>>,
+        client_manager: Arc<RwLock<ClientManager>>,
+    ) {
+        let mut generated_chunks: HashSet<(i32, i32)> = HashSet::new();
+
+        loop {
+            {
+                // Calculate demand for chunks
+                let mut client_manager = client_manager.write().await;
+                client_manager.calculate_demanded_chunks().await;
+            }
+
+            // Check for connected clients
+            let client_count = {
+                let client_manager = client_manager.read().await;
+                client_manager.clients.len()
+            };
+
+            if client_count == 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                continue; // No clients, continue the loop
+            }
+
+            // Get all demanded chunks
+            let demanded_chunks: HashSet<(i32, i32)> = {
+                let client_manager = client_manager.read().await;
+                client_manager.demanded_chunks.clone()
+            };
+
+            // Generate the demanded chunks
+            for chunk in demanded_chunks {
+                if !generated_chunks.contains(&chunk) {
+                    let x = chunk.0;
+                    let z = chunk.1;
+                    
+                    let timer = Instant::now();
+                    let generated_chunk = Chunk::generate_chunk(x, z);
+                    {
+                        let mut world = world.write().await;
+                        world.chunks.insert((x, z), generated_chunk);
+                        generated_chunks.insert(chunk);
+                    }
+                    // Metrics (Assuming CHUNK_GENERATION_TIME and CHUNK_GENERATED_COUNTER are defined elsewhere)
+                    CHUNK_GENERATION_TIME.observe(timer.elapsed().as_millis() as f64);
+                    CHUNK_GENERATED_COUNTER.inc();
+                }
+            }
+
+            // Sleep for a while before checking again
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
     }
 }

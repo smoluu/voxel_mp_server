@@ -38,7 +38,7 @@ async fn main() {
     // start metrics endpoint
     tokio::spawn(metrics::start());
     // Start generating chunks in a separate task
-    tokio::spawn(world_generation(world.clone(), client_manager.clone()));
+    tokio::spawn(World::world_generation(world.clone(), client_manager.clone()));
 
     // Spawn task to accept connections
     tokio::spawn(accept_connections(
@@ -75,7 +75,8 @@ async fn accept_connections(
                         write_half.clone(),
                         client_manager.clone(),
                         world.clone(),
-                    ).await;
+                    )
+                    .await;
                 }
                 Err(e) => {
                     eprintln!("Failed to accept TCP connection: {:?}", e);
@@ -83,7 +84,7 @@ async fn accept_connections(
             }
         }
     });
-       // Spawn a task to handle WebSocket connections
+    // Spawn a task to handle WebSocket connections
     let ws_listener_task = tokio::spawn(async move {
         loop {
             match ws_listener.accept().await {
@@ -270,7 +271,6 @@ async fn handle_tx(
             let mut client = client.write().await;
             client.chunk_demand = remaining_chunks;
         };
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
     //lock write_half
 }
@@ -308,47 +308,6 @@ async fn send_data(write_half: Arc<Mutex<OwnedWriteHalf>>, data: Vec<u8>) {
     println!("Bytes{:?}", &data[..data.len().min(16)]);
 }
 
-async fn world_generation(world: Arc<RwLock<World>>, client_manager: Arc<RwLock<ClientManager>>) {
-    let mut generated_chunks: HashSet<(i32, i32)> = HashSet::new(); // HashSet to track generated chunks
-    loop {
-        {
-            //calculate demand
-            let mut client_manager = client_manager.write().await;
-            client_manager.calculate_demanded_chunks().await;
-        }
-        //TODO add notify so loop doesnt run if no clients are connected
-        let client_count = {
-            let client_manager = client_manager.read().await;
-            client_manager.clients.len()
-        };
-        if client_count == 0 {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            continue; // No clients, continue the loop
-        }
-
-        // get all demanded chunks
-        let demanded_chunks: HashSet<(i32, i32)> = {
-            let client_manager = client_manager.read().await;
-            client_manager.demanded_chunks.clone()
-        };
-
-        //generate the demanded chunks
-        for chunk in demanded_chunks {
-            let mut world = world.write().await;
-            if !generated_chunks.contains(&chunk) {
-                let timer = Instant::now();
-                world.insert_chunk(chunk.0, chunk.1);
-                generated_chunks.insert(chunk);
-                //metrics
-                CHUNK_GENERATION_TIME.observe(timer.elapsed().as_millis() as f64);
-                CHUNK_GENERATED_COUNTER.inc();
-            }
-        }
-
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
-}
-
 async fn handle_websocket(ws_stream: WebSocketStream<tokio::net::TcpStream>) {
     let (mut ws_tx, mut ws_rx) = ws_stream.split();
 
@@ -366,7 +325,6 @@ async fn handle_websocket(ws_stream: WebSocketStream<tokio::net::TcpStream>) {
     let (tcp_read_half, mut tcp_write_half) = tcp_stream.into_split();
 
     let tcp_to_ws = tokio::spawn(async move {
-        
         let mut tcp_reader = tokio::io::BufReader::new(tcp_read_half);
         let mut buffer = vec![0; 1024]; // Buffer for reading TCP data
         loop {
