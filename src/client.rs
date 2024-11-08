@@ -1,6 +1,7 @@
 use crate::data::DataIdentifier;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::vec;
 use tokio::sync::RwLock;
 
 #[derive()]
@@ -8,7 +9,7 @@ pub struct Client {
     pub id: u32,                   // Unique ID for the client
     pub position: (f32, f32, f32), // client's position in the world
     pub state: u32,
-    pub chunk_demand: Vec<(i32, i32)>,
+    pub chunk_demand: Vec<(i32, i32, i32)>,
     pub packet_count_rx: u64,
 }
 
@@ -44,14 +45,14 @@ impl Client {
 
 pub struct ClientManager {
     pub clients: HashMap<u32, Arc<RwLock<Client>>>,
-    pub demanded_chunks: HashSet<(i32, i32)>
+    pub demanded_chunks: Vec<(i32, i32, i32)>
 }
 
 impl ClientManager {
     pub fn new() -> Self {
         ClientManager {
             clients: HashMap::new(),
-            demanded_chunks: HashSet::new(),
+            demanded_chunks: Vec::new(),
         }
     }
     pub async fn add_client(&mut self, client: Arc<RwLock<Client>>) {
@@ -78,19 +79,36 @@ impl ClientManager {
 
         positions
     }
-    //TODO sort hashset so closest chunks to clients are first in the set
-    //returns a hashset of chunk x,z values based on clients demands
-    pub async fn calculate_demanded_chunks(&mut self) -> HashSet<(i32, i32)> {
-        let mut all_demanded_chunks = Vec::new();
+    //returns a vec of chunk x,z,distance values based on clients demands & sorted by acending distance
+    pub async fn calculate_demanded_chunks(&mut self) -> Vec<(i32, i32, i32)> {
+        let mut filtered_demanded_chunks: HashMap<(i32, i32), i32> = HashMap::new();
+        let mut demanded_chunks = Vec::new();
         // Iterate through all clients in the HashMap
         for client_arc in self.clients.values() {
             let client = client_arc.read().await;
-            all_demanded_chunks.extend(client.chunk_demand.clone());
+            demanded_chunks.extend(client.chunk_demand.clone());
         }
-        //remove duplicates
-        for chunk in all_demanded_chunks {
-            self.demanded_chunks.insert(chunk);
+        // remove duplicates and keep smallest distance
+        for (x,z,distance) in demanded_chunks {
+            match filtered_demanded_chunks.get(&(x,z)) {
+                Some(&existing_distance) if existing_distance <= distance => {
+                    //ignore
+                }
+
+                _ => {
+                    filtered_demanded_chunks.insert((x,z),distance);
+                }
+            }
         }
+        //convert to vec for sorting
+        let mut sorted_demanded_chunks: Vec<(i32,i32,i32)> = filtered_demanded_chunks
+        .into_iter()
+        .map(|((x, z), distance)| (x, z, distance))
+        .collect();
+        // sort entries
+        sorted_demanded_chunks.sort_by_key(|&(_, _, distance)| distance);
+        
+        self.demanded_chunks = sorted_demanded_chunks;
         self.demanded_chunks.clone()
     }
 }

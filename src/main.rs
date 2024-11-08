@@ -256,10 +256,12 @@ async fn handle_tx(
 
         // send chunks on demand
         for chunk in chunk_demand {
+            let x = chunk.0;
+            let z = chunk.1;
             //check if chunk is generated
             let world = world.read().await;
             //println!("debug {:?}", chunk);
-            if world.chunks.contains_key(&chunk) {
+            if world.chunks.contains_key(&(x,z)) {
                 let chunk_data = world.chunk_to_bytes_rle(chunk.0, chunk.1);
                 send_data(write_half.clone(), chunk_data).await;
             } else {

@@ -114,23 +114,23 @@ impl World {
             }
 
             // Get all demanded chunks
-            let demanded_chunks: HashSet<(i32, i32)> = {
+            let demanded_chunks: Vec<(i32, i32, i32)> = {
                 let client_manager = client_manager.read().await;
                 client_manager.demanded_chunks.clone()
             };
 
             // Generate the demanded chunks
             for chunk in demanded_chunks {
-                if !generated_chunks.contains(&chunk) {
-                    let x = chunk.0;
-                    let z = chunk.1;
+                let x = chunk.0;
+                let z = chunk.1;
+                if !generated_chunks.contains(&(x,z)) {
                     
                     let timer = Instant::now();
                     let generated_chunk = Chunk::generate_chunk(x, z);
                     {
                         let mut world = world.write().await;
                         world.chunks.insert((x, z), generated_chunk);
-                        generated_chunks.insert(chunk);
+                        generated_chunks.insert((x,z));
                     }
                     // Metrics (Assuming CHUNK_GENERATION_TIME and CHUNK_GENERATED_COUNTER are defined elsewhere)
                     CHUNK_GENERATION_TIME.observe(timer.elapsed().as_millis() as f64);

@@ -32,15 +32,16 @@ pub async fn process_client_data(data: Vec<u8>, client: Arc<RwLock<Client>>) {
     // Read state (next 4 bytes, little-endian)
     let state = u32::from_le_bytes(data[17..21].try_into().unwrap());
 
-    let mut chunk_demand: Vec<(i32, i32)> = Vec::new(); // temp vector to store chunk positions
-                                                        // deserialize received chunks
-    for i in (21..data_length).step_by(8) {
+    let mut chunk_demand: Vec<(i32, i32, i32)> = Vec::new(); // temp vector to store chunk positions
+    // deserialize received chunks
+    for i in (21..data_length).step_by(12) {
         if i + 8 > data_length {
             continue;
         }
         let x = i32::from_le_bytes(data[i..i + 4].try_into().unwrap());
         let z = i32::from_le_bytes(data[i + 4..i + 8].try_into().unwrap());
-        chunk_demand.push((x, z));
+        let distance = i32::from_le_bytes(data[i + 8..i + 12].try_into().unwrap());
+        chunk_demand.push((x, z, distance));
     }
     {
         let mut client = client.write().await;
