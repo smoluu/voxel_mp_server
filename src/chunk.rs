@@ -101,4 +101,18 @@ impl Chunk {
             voxels: voxels,
         }
     }
+
+        // Retrieve a voxel from the chunk by its x, y, z coordinates
+    pub fn get_voxel(&self, x: i32, y: i32, z: i32) -> Option<&Voxel> {
+        // Check if the requested (x, y, z) are within the chunk's bounds
+        if x < 0 || x >= CHUNK_SIZE as i32 || y < 0 || y >= CHUNK_HEIGHT as i32 || z < 0 || z >= CHUNK_SIZE as i32 {
+            return None; // Out of bounds
+        }
+
+        // Calculate the index in the flat `voxels` vector
+        let index = (z * CHUNK_SIZE as i32 + x) as usize * CHUNK_HEIGHT + y as usize;
+
+        // Return the voxel at the calculated index if it exists
+        self.voxels.get(index)
+    }
 }

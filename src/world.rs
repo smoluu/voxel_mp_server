@@ -5,7 +5,7 @@ use crate::{
     CHUNK_GENERATED_COUNTER, CHUNK_GENERATION_TIME,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::{collections::{HashMap, HashSet}, thread::spawn};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
@@ -31,6 +31,7 @@ impl Player {
 pub struct World {
     pub chunks: HashMap<(i32, i32), Chunk>, // 2D map of chunks identified by their coordinates (x, z)
     pub players: HashMap<u32, Player>,      // Map of players by their unique ID
+    pub spawn: Vec<(i32,i32,i32)>
 }
 
 impl World {
@@ -38,6 +39,7 @@ impl World {
         World {
             players: HashMap::new(),
             chunks: HashMap::new(),
+            spawn: Vec::new(),
         }
     }
 
@@ -95,6 +97,21 @@ impl World {
     ) {
         let mut generated_chunks: HashSet<(i32, i32)> = HashSet::new();
 
+        // generate starting chunks 3x3
+        for x in 0..2 {
+            for z in 0..2 {
+                let generated_chunk = Chunk::generate_chunk(x, z);
+                let mut world = world.write().await;
+                world.chunks.insert((x, z), generated_chunk);
+                generated_chunks.insert((x, z));
+            }
+        }
+        // TODO find spawn point
+        let spawn_chunk = {
+            let mut world = world.write().await;
+            world.get_chunk(0, 0);
+        };
+
         loop {
             {
                 // Calculate demand for chunks
@@ -123,14 +140,13 @@ impl World {
             for chunk in demanded_chunks {
                 let x = chunk.0;
                 let z = chunk.1;
-                if !generated_chunks.contains(&(x,z)) {
-                    
+                if !generated_chunks.contains(&(x, z)) {
                     let timer = Instant::now();
                     let generated_chunk = Chunk::generate_chunk(x, z);
                     {
                         let mut world = world.write().await;
                         world.chunks.insert((x, z), generated_chunk);
-                        generated_chunks.insert((x,z));
+                        generated_chunks.insert((x, z));
                     }
                     // Metrics (Assuming CHUNK_GENERATION_TIME and CHUNK_GENERATED_COUNTER are defined elsewhere)
                     CHUNK_GENERATION_TIME.observe(timer.elapsed().as_millis() as f64);

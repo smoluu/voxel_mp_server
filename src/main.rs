@@ -39,6 +39,7 @@ async fn main() {
     tokio::spawn(metrics::start());
     // Start generating chunks in a separate task
     tokio::spawn(World::world_generation(world.clone(), client_manager.clone()));
+    
 
     // Spawn task to accept connections
     tokio::spawn(accept_connections(
