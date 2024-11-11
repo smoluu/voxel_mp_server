@@ -29,7 +29,7 @@ pub static CHUNK_HEIGHT: usize = 256;
 
 impl Chunk {
     // Generates a new chunk of voxels
-    pub fn generate_chunk(x: i32, z: i32) -> Self {
+    pub fn new(x: i32, z: i32) -> Self {
         let mut voxel_index: u32 = 0;
         let mut solid_voxel_count: u32 = 0;
         let mut voxels = Vec::with_capacity(CHUNK_SIZE * CHUNK_HEIGHT * CHUNK_SIZE);
@@ -64,7 +64,8 @@ impl Chunk {
                 // normalize height to range 99 to CHUNK_HEIGHT
                 let min_height = 99;
                 let height_range = (CHUNK_HEIGHT - min_height) as f64;
-                let normalized_height = ((height + 1.0) * 0.5 * height_range + min_height as f64) as u32;
+                let normalized_height =
+                    ((height + 1.0) * 0.5 * height_range + min_height as f64) as u32;
 
                 height_map[voxel_x * CHUNK_SIZE + voxel_z] = normalized_height;
             }
@@ -102,17 +103,18 @@ impl Chunk {
         }
     }
 
-        // Retrieve a voxel from the chunk by its x, y, z coordinates
-    pub fn get_voxel(&self, x: i32, y: i32, z: i32) -> Option<&Voxel> {
-        // Check if the requested (x, y, z) are within the chunk's bounds
-        if x < 0 || x >= CHUNK_SIZE as i32 || y < 0 || y >= CHUNK_HEIGHT as i32 || z < 0 || z >= CHUNK_SIZE as i32 {
-            return None; // Out of bounds
-        }
+    // return x,y,z coordinates of a voxel using its id
+    pub fn index_to_coords(&self, index: usize) -> (i32, i32, i32) {
+        let index = index as i32;
+        let chunk_size = CHUNK_SIZE as i32;
+        let chunk_height = CHUNK_HEIGHT as i32;
+        let x = index % chunk_size;
+        let y = (index / (chunk_size * chunk_size)) % chunk_height;
+        let z = (index / chunk_size) % chunk_size;
 
-        // Calculate the index in the flat `voxels` vector
-        let index = (z * CHUNK_SIZE as i32 + x) as usize * CHUNK_HEIGHT + y as usize;
-
-        // Return the voxel at the calculated index if it exists
+        return (x, y, z);
+    }
+    pub fn get_voxel(&self, index: usize) -> Option<&Voxel> {
         self.voxels.get(index)
     }
 }

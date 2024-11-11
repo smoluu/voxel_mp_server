@@ -1,5 +1,5 @@
 use crate::{
-    chunk::{Chunk, Voxel},
+    chunk::{Chunk, Voxel, CHUNK_HEIGHT, CHUNK_SIZE},
     client::ClientManager,
     data::DataIdentifier,
     CHUNK_GENERATED_COUNTER, CHUNK_GENERATION_TIME,
@@ -31,16 +31,44 @@ impl Player {
 pub struct World {
     pub chunks: HashMap<(i32, i32), Chunk>, // 2D map of chunks identified by their coordinates (x, z)
     pub players: HashMap<u32, Player>,      // Map of players by their unique ID
-    pub spawn: Vec<(i32,i32,i32)>
+    pub spawn: (i32,i32,i32)
 }
 
 impl World {
     pub fn new() -> Self {
-        World {
+        let mut world = World {
             players: HashMap::new(),
             chunks: HashMap::new(),
-            spawn: Vec::new(),
+            spawn: (0,0,0),
+        };
+        
+        // generate starting chunks 3x3
+        for x in 0..2 {
+            for z in 0..2 {
+                let generated_chunk = Chunk::new(x, z);
+                world.chunks.insert((x, z), generated_chunk);
+            }
         }
+
+        // calculate spawn point by checking the 0,0 chunk middle voxels on y axis until empty space is found
+        if let Some(spawn_chunk) = world.get_chunk(0, 0){
+            // middle index
+            let mut index = CHUNK_SIZE*CHUNK_SIZE / 2 - (CHUNK_SIZE / 2 +1);
+            for y in 0..CHUNK_HEIGHT {
+                println!("{:?}", spawn_chunk.index_to_coords(2048));
+                if let Some(voxel) = spawn_chunk.get_voxel(index) {
+                    if voxel.id == 0 {
+                        world.spawn = spawn_chunk.index_to_coords(index);
+                        break;
+                    }
+                }
+                index += CHUNK_SIZE * CHUNK_SIZE;
+
+            }
+            println!("{:?}",world.spawn)
+        }
+
+        world
     }
 
     pub fn add_player(&mut self, player: Player) {
@@ -97,20 +125,7 @@ impl World {
     ) {
         let mut generated_chunks: HashSet<(i32, i32)> = HashSet::new();
 
-        // generate starting chunks 3x3
-        for x in 0..2 {
-            for z in 0..2 {
-                let generated_chunk = Chunk::generate_chunk(x, z);
-                let mut world = world.write().await;
-                world.chunks.insert((x, z), generated_chunk);
-                generated_chunks.insert((x, z));
-            }
-        }
-        // TODO find spawn point
-        let spawn_chunk = {
-            let mut world = world.write().await;
-            world.get_chunk(0, 0);
-        };
+
 
         loop {
             {
@@ -142,7 +157,7 @@ impl World {
                 let z = chunk.1;
                 if !generated_chunks.contains(&(x, z)) {
                     let timer = Instant::now();
-                    let generated_chunk = Chunk::generate_chunk(x, z);
+                    let generated_chunk = Chunk::new(x, z);
                     {
                         let mut world = world.write().await;
                         world.chunks.insert((x, z), generated_chunk);

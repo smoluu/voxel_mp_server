@@ -118,11 +118,16 @@ async fn handle_new_connection(
         let manager = client_manager.read().await;
         (manager.clients.len() as u32) + 1
     };
+    // get spawn point coordinates
+    let spawn_point = {
+        let world = world.read().await;
+        (world.spawn.0 as f32, world.spawn.1 as f32, world.spawn.2 as f32)
+    };
 
     // Create the new client object
     let client = Arc::new(RwLock::new(Client {
         id: client_id,
-        position: (0.0, 102.0, 0.0), // Initial position
+        position: spawn_point, // Initial position
         state: 0,
         chunk_demand: vec![],
         packet_count_rx: 0,
