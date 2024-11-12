@@ -12,6 +12,7 @@ use futures_util::SinkExt;
 use metrics::*;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::thread::Thread;
 use std::time::Instant;
 use std::vec;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -38,8 +39,10 @@ async fn main() {
     // start metrics endpoint
     tokio::spawn(metrics::start());
     // Start generating chunks in a separate task
-    tokio::spawn(World::world_generation(world.clone(), client_manager.clone()));
-    
+    tokio::spawn(World::world_generation(
+        world.clone(),
+        client_manager.clone(),
+    ));
 
     // Spawn task to accept connections
     tokio::spawn(accept_connections(
@@ -121,7 +124,11 @@ async fn handle_new_connection(
     // get spawn point coordinates
     let spawn_point = {
         let world = world.read().await;
-        (world.spawn.0 as f32, world.spawn.1 as f32, world.spawn.2 as f32)
+        (
+            world.spawn.0 as f32,
+            world.spawn.1 as f32,
+            world.spawn.2 as f32,
+        )
     };
 
     // Create the new client object
@@ -239,6 +246,7 @@ async fn handle_rx(
         } else {
             println!("Failed to read the full message.");
         }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
 }
 
@@ -267,7 +275,7 @@ async fn handle_tx(
             //check if chunk is generated
             let world = world.read().await;
             //println!("debug {:?}", chunk);
-            if world.chunks.contains_key(&(x,z)) {
+            if world.chunks.contains_key(&(x, z)) {
                 let chunk_data = world.chunk_to_bytes_rle(chunk.0, chunk.1);
                 send_data(write_half.clone(), chunk_data).await;
             } else {
@@ -279,6 +287,7 @@ async fn handle_tx(
             let mut client = client.write().await;
             client.chunk_demand = remaining_chunks;
         };
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     //lock write_half
 }

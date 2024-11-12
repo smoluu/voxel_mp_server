@@ -5,9 +5,12 @@ use crate::{
     CHUNK_GENERATED_COUNTER, CHUNK_GENERATION_TIME,
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::{HashMap, HashSet}, thread::spawn};
 use std::sync::Arc;
 use std::time::Instant;
+use std::{
+    collections::{HashMap, HashSet},
+    thread::spawn,
+};
 use tokio::sync::RwLock;
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -31,7 +34,7 @@ impl Player {
 pub struct World {
     pub chunks: HashMap<(i32, i32), Chunk>, // 2D map of chunks identified by their coordinates (x, z)
     pub players: HashMap<u32, Player>,      // Map of players by their unique ID
-    pub spawn: (i32,i32,i32)
+    pub spawn: (i32, i32, i32),
 }
 
 impl World {
@@ -39,9 +42,9 @@ impl World {
         let mut world = World {
             players: HashMap::new(),
             chunks: HashMap::new(),
-            spawn: (0,0,0),
+            spawn: (0, 0, 0),
         };
-        
+
         // generate starting chunks 3x3
         for x in 0..2 {
             for z in 0..2 {
@@ -50,22 +53,27 @@ impl World {
             }
         }
 
-        // calculate spawn point by checking the 0,0 chunk middle voxels on y axis until empty space is found
-        if let Some(spawn_chunk) = world.get_chunk(0, 0){
+        // calculate spawn point by checking the 0,0 chunk middle voxels on y axis until 2 empty space is found
+        if let Some(spawn_chunk) = world.get_chunk(0, 0) {
             // middle index
-            let mut index = CHUNK_SIZE*CHUNK_SIZE / 2 - (CHUNK_SIZE / 2 +1);
+            let mut index = CHUNK_SIZE * CHUNK_SIZE / 2 - (CHUNK_SIZE / 2 + 1);
             for y in 0..CHUNK_HEIGHT {
-                println!("{:?}", spawn_chunk.index_to_coords(2048));
                 if let Some(voxel) = spawn_chunk.get_voxel(index) {
                     if voxel.id == 0 {
-                        world.spawn = spawn_chunk.index_to_coords(index);
-                        break;
+                        //check above voxel for air
+                        if let Some(voxel) = spawn_chunk.get_voxel(CHUNK_SIZE * CHUNK_SIZE + index)
+                        {
+                            if voxel.id == 0 {
+                                world.spawn = spawn_chunk.index_to_coords(CHUNK_SIZE * CHUNK_SIZE + index);
+                                break;
+                            }
+                        }
+                        index += CHUNK_SIZE * CHUNK_SIZE * 2;
                     }
                 }
                 index += CHUNK_SIZE * CHUNK_SIZE;
-
             }
-            println!("{:?}",world.spawn)
+            println!("{:?}", world.spawn)
         }
 
         world
@@ -124,8 +132,6 @@ impl World {
         client_manager: Arc<RwLock<ClientManager>>,
     ) {
         let mut generated_chunks: HashSet<(i32, i32)> = HashSet::new();
-
-
 
         loop {
             {
