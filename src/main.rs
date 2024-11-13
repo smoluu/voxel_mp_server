@@ -39,9 +39,15 @@ async fn main() {
     // start metrics endpoint
     tokio::spawn(metrics::start());
     // Start generating chunks in a separate task
-    tokio::spawn(World::world_generation(
+    tokio::spawn(World::world_generation_task(
         world.clone(),
         client_manager.clone(),
+    ));
+    // start world update task
+    tokio::spawn(World::world_update_task(
+        world.clone(),
+        client_manager.clone(),
+        100, // 10/s
     ));
 
     // Spawn task to accept connections
@@ -134,7 +140,8 @@ async fn handle_new_connection(
     // Create the new client object
     let client = Arc::new(RwLock::new(Client {
         id: client_id,
-        position: spawn_point, // Initial position
+        position: spawn_point,
+        rotation: (0.0, 0.0, 0.0),
         state: 0,
         chunk_demand: vec![],
         packet_count_rx: 0,
@@ -150,7 +157,12 @@ async fn handle_new_connection(
     // add player to world
     {
         let mut world = world.write().await;
-        world.add_player(Player::new(client_id, (0.0, 102.0, 0.0), 0));
+        world.add_player(Player::new(
+            client_id,
+            (0.0, 102.0, 0.0),
+            (0.0, 0.0, 0.0),
+            0,
+        ));
     }
 
     // Spawn a task to handle incoming data (read_half) and outgoing data (write_half)
@@ -262,6 +274,7 @@ async fn handle_tx(
     }
 
     loop {
+        println!("LOOOP");
         let mut remaining_chunks = Vec::new();
         let chunk_demand = {
             let client = client.read().await;
@@ -277,7 +290,9 @@ async fn handle_tx(
             //println!("debug {:?}", chunk);
             if world.chunks.contains_key(&(x, z)) {
                 let chunk_data = world.chunk_to_bytes_rle(chunk.0, chunk.1);
-                send_data(write_half.clone(), chunk_data).await;
+                if !send_data(write_half.clone(), chunk_data).await {
+                    break;
+                }
             } else {
                 // chunk that were not yet generated
                 remaining_chunks.push(chunk);
@@ -287,12 +302,21 @@ async fn handle_tx(
             let mut client = client.write().await;
             client.chunk_demand = remaining_chunks;
         };
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        // send players data to client
+        
+        let world = world.read().await;
+        let player_data = world.players_to_bytes();
+        if !send_data(write_half.clone(), player_data).await {
+            break;
+        }
+        
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
     //lock write_half
 }
 
-async fn send_data(write_half: Arc<Mutex<OwnedWriteHalf>>, data: Vec<u8>) {
+async fn send_data(write_half: Arc<Mutex<OwnedWriteHalf>>, data: Vec<u8>) -> bool {
     let mut socket = write_half.lock().await; // Lock the mutex to get access to the write_half
     let buffer_size: usize = 1024;
 
@@ -310,7 +334,7 @@ async fn send_data(write_half: Arc<Mutex<OwnedWriteHalf>>, data: Vec<u8>) {
             .await
         {
             println!("Failed to send client data: {:?}", e);
-            break;
+            return false;
         }
 
         offset += bytes_to_send; // Update offset
@@ -323,6 +347,7 @@ async fn send_data(write_half: Arc<Mutex<OwnedWriteHalf>>, data: Vec<u8>) {
         identifier, data_len
     );
     println!("Bytes{:?}", &data[..data.len().min(16)]);
+    true
 }
 
 async fn handle_websocket(ws_stream: WebSocketStream<tokio::net::TcpStream>) {

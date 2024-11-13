@@ -7,7 +7,8 @@ use tokio::sync::RwLock;
 #[derive()]
 pub struct Client {
     pub id: u32,                   // Unique ID for the client
-    pub position: (f32, f32, f32), // client's position in the world
+    pub position: (f32, f32, f32), // client's position
+    pub rotation: (f32, f32, f32), // client's rotation
     pub state: u32,
     pub chunk_demand: Vec<(i32, i32, i32)>,
     pub packet_count_rx: u64,
@@ -67,17 +68,17 @@ impl ClientManager {
     pub fn get_client(&self, client_id: u32) -> Option<Arc<RwLock<Client>>> {
         self.clients.get(&client_id).cloned()
     }
-
-    pub async fn get_all_client_positions(&self) -> Vec<(f32, f32, f32)> {
-        let mut positions = Vec::new();
+    // returns all clients id, position, rotation, state
+    pub async fn get_all_client_data(&self) -> Vec<(u32, (f32, f32, f32), (f32, f32, f32), u32)> {
+        let mut client_data = Vec::new();
 
         // Iterate through all clients in the HashMap
         for client_arc in self.clients.values() {
             let client = client_arc.read().await; // Acquire read lock on the client
-            positions.push(client.position); // Collect client position
+            client_data.push((client.id,client.position, client.rotation, client.state)); // Collect client position
         }
 
-        positions
+        client_data
     }
     //returns a vec of chunk x,z,distance values based on clients demands & sorted by acending distance
     pub async fn calculate_demanded_chunks(&mut self) -> Vec<(i32, i32, i32)> {

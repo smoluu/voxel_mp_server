@@ -17,14 +17,16 @@ use tokio::sync::RwLock;
 pub struct Player {
     pub id: u32, // Unique ID for the player
     pub position: (f32, f32, f32),
+    pub rotation: (f32, f32, f32),
     pub state: u32,
 }
 
 impl Player {
-    pub fn new(id: u32, position: (f32, f32, f32), state: u32) -> Self {
+    pub fn new(id: u32, position: (f32, f32, f32), rotation: (f32, f32, f32), state: u32) -> Self {
         Player {
             id,
             position,
+            rotation,
             state,
         }
     }
@@ -34,7 +36,7 @@ impl Player {
 pub struct World {
     pub chunks: HashMap<(i32, i32), Chunk>, // 2D map of chunks identified by their coordinates (x, z)
     pub players: HashMap<u32, Player>,      // Map of players by their unique ID
-    pub spawn: (i32, i32, i32),
+    pub spawn: (i32, i32, i32),             // Position where new client spawns
 }
 
 impl World {
@@ -64,7 +66,8 @@ impl World {
                         if let Some(voxel) = spawn_chunk.get_voxel(CHUNK_SIZE * CHUNK_SIZE + index)
                         {
                             if voxel.id == 0 {
-                                world.spawn = spawn_chunk.index_to_coords(CHUNK_SIZE * CHUNK_SIZE + index);
+                                world.spawn =
+                                    spawn_chunk.index_to_coords(CHUNK_SIZE * CHUNK_SIZE + index);
                                 break;
                             }
                         }
@@ -89,6 +92,34 @@ impl World {
 
     pub fn get_player(&self, id: u32) -> Option<&Player> {
         self.players.get(&id)
+    }
+    pub fn players_to_bytes(&self) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.resize(4, 1); // Pre-allocate length header bytes (byte index 0-3)
+        //identifier (4 bytes)
+        let data_identifier = DataIdentifier::PlayerData;
+        data.push(data_identifier as u8);
+
+        // player count (4 bytes)
+        let player_count = self.players.len() as i32;
+        data.extend(player_count.to_le_bytes());
+        // all players id,position,rotation,state (28 bytes for each player)
+        for (id,player) in self.players.clone() {
+            data.extend(id.to_le_bytes());
+            data.extend(player.position.0.to_le_bytes()); //x (4bytes)
+            data.extend(player.position.1.to_le_bytes()); //y (4bytes)
+            data.extend(player.position.2.to_le_bytes()); //z (4bytes)
+            data.extend(player.rotation.0.to_le_bytes()); //x (4bytes)
+            data.extend(player.rotation.1.to_le_bytes()); //y (4bytes)
+            data.extend(player.rotation.2.to_le_bytes()); //z (4bytes)
+            data.extend(player.state.to_le_bytes()); //state (4bytes)
+        }
+
+        //add lenght to start (4 bytes)
+        let length = data.len() as u32;
+        let length_bytes = length.to_le_bytes();
+        data[..4].copy_from_slice(&length_bytes);
+        data
     }
 
     pub fn chunk_to_bytes_rle(&self, x: i32, z: i32) -> Vec<u8> {
@@ -127,7 +158,7 @@ impl World {
     }
 
     // Function to handle world generation based on demanded chunks
-    pub async fn world_generation(
+    pub async fn world_generation_task(
         world: Arc<RwLock<World>>,
         client_manager: Arc<RwLock<ClientManager>>,
     ) {
@@ -177,6 +208,33 @@ impl World {
 
             // Sleep for a while before checking again
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    }
+    // updates world
+    pub async fn world_update_task(
+        world: Arc<RwLock<World>>,
+        client_manager: Arc<RwLock<ClientManager>>,
+        update_interval: u64, // World update intervals in milliseconds
+    ) {
+        loop {
+            // update clients positions,rotation,state to world
+            // get a copy of clients
+            let client_manager_clone = client_manager.read().await;
+            let client_data = client_manager_clone.get_all_client_data().await;
+
+            //iterate trough clients and make player objects from them
+            let mut players: Vec<Player> = vec![];
+            for (id, position, rotation, state) in client_data {
+                let mut world = world.write().await;
+                world.add_player(Player {
+                    id,
+                    position,
+                    rotation,
+                    state,
+                });
+            }
+
+            tokio::time::sleep(std::time::Duration::from_millis(update_interval)).await;
         }
     }
 }

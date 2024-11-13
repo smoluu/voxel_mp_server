@@ -9,6 +9,7 @@ pub enum DataIdentifier {
     ClientData = 1,
     ChunkData = 2,
     Keepalive = 3,
+    PlayerData = 4,
 }
 
 
@@ -25,16 +26,20 @@ pub async fn process_client_data(data: Vec<u8>, client: Arc<RwLock<Client>>) {
     let client_id = u32::from_le_bytes(data[1..5].try_into().unwrap());
 
     // Read position (3 x 4 bytes as f32, little-endian)
-    let x = f32::from_le_bytes(data[5..9].try_into().unwrap());
-    let y = f32::from_le_bytes(data[9..13].try_into().unwrap());
-    let z = f32::from_le_bytes(data[13..17].try_into().unwrap());
+    let pos_x = f32::from_le_bytes(data[5..9].try_into().unwrap());
+    let pos_y = f32::from_le_bytes(data[9..13].try_into().unwrap());
+    let pos_z = f32::from_le_bytes(data[13..17].try_into().unwrap());
+    
+    //read rotation y,z (2 pos_ 4 bytes as f32, little-endian)
+    let rotation_y = f32::from_le_bytes(data[17..21].try_into().unwrap());
+    let rotation_x = f32::from_le_bytes(data[21..25].try_into().unwrap());
 
     // Read state (next 4 bytes, little-endian)
-    let state = u32::from_le_bytes(data[17..21].try_into().unwrap());
+    let state = u32::from_le_bytes(data[25..29].try_into().unwrap());
 
     let mut chunk_demand: Vec<(i32, i32, i32)> = Vec::new(); // temp vector to store chunk positions
     // deserialize received chunks
-    for i in (21..data_length).step_by(12) {
+    for i in (29..data_length).step_by(12) {
         if i + 8 > data_length {
             continue;
         }
@@ -45,20 +50,16 @@ pub async fn process_client_data(data: Vec<u8>, client: Arc<RwLock<Client>>) {
     }
     {
         let mut client = client.write().await;
-        client.position.0 = x;
-        client.position.1 = y;
-        client.position.2 = z;
+        client.position.0 = pos_x;
+        client.position.1 = pos_y;
+        client.position.2 = pos_z;
+        client.rotation.0 = rotation_x;
+        client.rotation.1 = rotation_y;
+        client.rotation.2 = 0.0;
         client.state = state;
         client.chunk_demand = chunk_demand;
         if client.packet_count_rx == 0 {}
         client.packet_count_rx += 1;
-        println!(
-            "Client x{} y{} z{} chunk_demanLEN{}",
-            client.position.0,
-            client.position.1,
-            client.position.2,
-            client.chunk_demand.len()
-        );
         //metrics
         NETWORK_BYTES_INGRESS_TOTAL.inc_by(data_length as u64);
     }
